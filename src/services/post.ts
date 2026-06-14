@@ -13,10 +13,13 @@ import {
   increment,
   arrayUnion,
   arrayRemove,
+  getDocs,
+  limit,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage, handleFirestoreError, OperationType } from "../firebase/config";
 import { Post, Comment } from "../types";
+import { UserService } from "./user";
 
 export const PostService = {
   async createPost(
@@ -64,6 +67,16 @@ export const PostService = {
       const batch = writeBatch(db);
       batch.set(postRef, newPost);
       await batch.commit();
+
+      // Award XP & trigger gamification
+      try {
+        const postsQ = query(collection(db, "posts"), where("authorId", "==", authorId), limit(2));
+        const postsSnap = await getDocs(postsQ);
+        const actionType = postsSnap.size <= 1 ? "first_post" : "post_created";
+        await UserService.awardXP(authorId, 30, actionType);
+      } catch (xpErr) {
+        console.warn("Failed to award XP:", xpErr);
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, path);
     }

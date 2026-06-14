@@ -1,9 +1,19 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { doc, updateDoc } from "firebase/firestore";
+import { db } from "../firebase/config";
 
-type Theme = "light" | "dark";
+export type SocialTheme =
+  | "facebook-dark"
+  | "facebook-light"
+  | "spotify"
+  | "discord"
+  | "cyberpunk"
+  | "neon-green"
+  | "midnight";
 
 interface ThemeContextType {
-  theme: Theme;
+  theme: SocialTheme;
+  setTheme: (theme: SocialTheme) => void;
   toggleTheme: () => void;
 }
 
@@ -18,27 +28,80 @@ export function useTheme() {
 }
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [theme, setTheme] = useState<Theme>(() => {
+  const [theme, setThemeState] = useState<SocialTheme>(() => {
     const saved = localStorage.getItem("fb-theme");
-    return (saved as Theme) || "dark"; // Default to dark mode as requested by user
+    return (saved as SocialTheme) || "facebook-dark";
   });
 
+  const [activeUserId, setActiveUserId] = useState<string | null>(null);
+
+  // Sync theme to root class names
   useEffect(() => {
     localStorage.setItem("fb-theme", theme);
     const root = document.documentElement;
-    if (theme === "dark") {
-      root.classList.add("dark");
-    } else {
+    
+    // Remove all possible theme classes
+    const themesList: SocialTheme[] = [
+      "facebook-dark",
+      "facebook-light",
+      "spotify",
+      "discord",
+      "cyberpunk",
+      "neon-green",
+      "midnight",
+    ];
+    
+    themesList.forEach((t) => root.classList.remove(t));
+    
+    // Add current theme class
+    root.classList.add(theme);
+
+    // Also support custom dark mode class toggling for general tailwind dark: selectors
+    if (theme === "facebook-light") {
       root.classList.remove("dark");
+    } else {
+      root.classList.add("dark");
     }
   }, [theme]);
 
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  const setTheme = async (newTheme: SocialTheme) => {
+    setThemeState(newTheme);
+    localStorage.setItem("fb-theme", newTheme);
+
+    // If there is an active user logged in, persist to Firestore
+    if (activeUserId) {
+      try {
+        const userRef = doc(db, "users", activeUserId);
+        await updateDoc(userRef, { theme: newTheme });
+      } catch (err) {
+        console.warn("Failed to persist theme choice to Firestore:", err);
+      }
+    }
   };
 
+  const toggleTheme = () => {
+    const themes: SocialTheme[] = [
+      "facebook-dark",
+      "facebook-light",
+      "spotify",
+      "discord",
+      "cyberpunk",
+      "neon-green",
+      "midnight",
+    ];
+    const currentIndex = themes.indexOf(theme);
+    const nextIndex = (currentIndex + 1) % themes.length;
+    setTheme(themes[nextIndex]);
+  };
+
+  // Provide a way to listen or register the active user ID for server-side persistence
+  useEffect(() => {
+    // Listen for authentication changes or check AuthState to save
+    // We can expose registration through an effect or context listeners
+  }, []);
+
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
+    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
       {children}
     </ThemeContext.Provider>
   );

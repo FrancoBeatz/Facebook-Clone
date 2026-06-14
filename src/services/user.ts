@@ -28,6 +28,69 @@ export const UserService = {
     }
   },
 
+  async awardXP(
+    uid: string,
+    amount: number,
+    actionType: string
+  ): Promise<{ xpAdded: number; leveledUp: boolean; newLevel?: string; unlockedAchievements?: string[] }> {
+    try {
+      const docRef = doc(db, "users", uid);
+      const docSnap = await getDoc(docRef);
+      if (!docSnap.exists()) return { xpAdded: 0, leveledUp: false };
+
+      const u = docSnap.data() as UserProfile;
+      const currentXp = u.xp || 0;
+      const newXp = currentXp + amount;
+
+      // Leveling scale
+      let newLevel = "Beginner";
+      if (newXp >= 3500) newLevel = "Legend";
+      else if (newXp >= 1500) newLevel = "Influencer";
+      else if (newXp >= 600) newLevel = "Creator";
+      else if (newXp >= 200) newLevel = "Explorer";
+
+      const leveledUp = newLevel !== (u.level || "Beginner");
+
+      // Auto unlock achievements
+      const achievements = u.achievements || [];
+      const unlockedAchievements: string[] = [];
+
+      if (actionType === "first_post" && !achievements.includes("First Post")) {
+        unlockedAchievements.push("First Post");
+      }
+      if (actionType === "first_friend" && !achievements.includes("First Friend")) {
+        unlockedAchievements.push("First Friend");
+      }
+      if (newLevel === "Creator" && !achievements.includes("Top Creator")) {
+        unlockedAchievements.push("Top Creator");
+      }
+      if (newLevel === "Influencer" && !achievements.includes("Social Butterfly")) {
+        unlockedAchievements.push("Social Butterfly");
+      }
+      if (newLevel === "Legend" && !achievements.includes("Viral Post")) {
+        unlockedAchievements.push("Viral Post");
+      }
+
+      const finalAchievements = [...achievements, ...unlockedAchievements];
+
+      await updateDoc(docRef, {
+        xp: newXp,
+        level: newLevel,
+        achievements: finalAchievements,
+      });
+
+      return {
+        xpAdded: amount,
+        leveledUp,
+        newLevel,
+        unlockedAchievements,
+      };
+    } catch (err) {
+      console.warn("Error awarding XP:", err);
+      return { xpAdded: 0, leveledUp: false };
+    }
+  },
+
   async searchUsers(searchText: string): Promise<UserProfile[]> {
     const path = "users";
     try {
@@ -35,7 +98,7 @@ export const UserService = {
       const querySnapshot = await getDocs(q);
       const results: UserProfile[] = [];
       const searchLower = searchText.toLowerCase().trim();
-      
+
       querySnapshot.forEach((docSnap) => {
         const u = docSnap.data() as UserProfile;
         if (
@@ -72,11 +135,8 @@ export const UserService = {
     const storagePath = `users/${uid}/${type}_${Date.now()}.${fileExtension}`;
     try {
       const storageRef = ref(storage, storagePath);
-      // Upload the bytes
       await uploadBytes(storageRef, file);
-      // Get the url
       const downloadUrl = await getDownloadURL(storageRef);
-      // Save url to firestore profile
       if (type === "profile") {
         await this.updateUserProfile(uid, { profilePicture: downloadUrl });
       } else {
@@ -87,5 +147,5 @@ export const UserService = {
       console.error(`Error uploading photo ${type}:`, err);
       throw err;
     }
-  }
+  },
 };

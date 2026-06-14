@@ -19,6 +19,14 @@ export interface UserProfile {
   lastActive?: string;
   deviceType?: string;
   loginHistory?: string[]; // array of ISO datetimes
+  
+  // Custom SaaS-grade social app upgrades
+  theme?: string;
+  xp?: number;
+  level?: string;
+  achievements?: string[];
+  skills?: string;
+  portfolio?: string;
 }
 
 export interface Post {
@@ -131,4 +139,15 @@ export interface Report {
   createdAt: string;
   status: "pending" | "resolved";
 }
+
+// FB clone - Story Highlights
+export interface Highlight {
+  id: string;
+  userId: string;
+  title: string;
+  coverColor: string; // Tailwind bg class like "bg-gradient-to-tr from-pink-500 to-rose-500"
+  postIds: string[]; // List of post UIDs in this highlight
+  createdAt: string;
+}
+
 

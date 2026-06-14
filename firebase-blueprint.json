@@ -106,6 +106,20 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "fromId", "toId", "status", "createdAt"]
+    },
+    "Highlight": {
+      "title": "Highlight",
+      "description": "User-curated Story Highlight album containing selected past posts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "coverColor": { "type": "string" },
+        "postIds": { "type": "array" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "title", "coverColor", "postIds", "createdAt"]
     }
   },
   "firestore": {
@@ -136,6 +150,10 @@
     "relationships": {
       "schema": "Relationship",
       "description": "Friendship states (requested, friends)"
+    },
+    "highlights": {
+      "schema": "Highlight",
+      "description": "User story highlight albums"
     }
   }
 }

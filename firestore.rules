@@ -190,5 +190,26 @@ service cloud.firestore {
       allow create: if isVerifiedUser() && incoming().reporterId == request.auth.uid;
       allow delete: if isPlatformAdmin();
     }
+
+    // 13. Story Highlights Collection
+    match /highlights/{highlightId} {
+      allow read: if isSignedIn();
+      allow create: if isVerifiedUser() 
+                    && isValidId(highlightId)
+                    && incoming().id == highlightId
+                    && incoming().userId == request.auth.uid
+                    && incoming().postIds is list
+                    && incoming().postIds.size() <= 20
+                    && incoming().createdAt is string && incoming().createdAt.size() <= 45;
+      allow update: if isVerifiedUser()
+                    && existing().userId == request.auth.uid
+                    && incoming().userId == request.auth.uid
+                    && incoming().id == existing().id
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().postIds is list
+                    && incoming().postIds.size() <= 20
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'coverColor', 'postIds']);
+      allow delete: if isSignedIn() && (existing().userId == request.auth.uid || isPlatformAdmin());
+    }
   }
 }

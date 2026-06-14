@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { ThumbsUp, MessageSquare, Trash2, Send, CornerDownRight, Bookmark, Flag } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { useAuth } from "../context/AuthContext";
 import { PostService } from "../services/post";
 import { BookmarkService } from "../services/bookmark";
@@ -24,6 +25,18 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
   const [isSaved, setIsSaved] = useState(false);
   const [showReportForm, setShowReportForm] = useState(false);
   const [reportReason, setReportReason] = useState("");
+
+  // Facebook Reactions state
+  const [selectedReaction, setSelectedReaction] = useState<{ emoji: string; label: string; color: string } | null>(null);
+  const [showReactionPanel, setShowReactionPanel] = useState(false);
+  const panelTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clear timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (panelTimeoutRef.current) clearTimeout(panelTimeoutRef.current);
+    };
+  }, []);
 
   // Handle bookmark tracking
   useEffect(() => {
@@ -369,15 +382,108 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
 
       {/* Action Buttons */}
       <div className="flex justify-between px-2 py-1.5 border-b border-neutral-100 dark:border-[#3A3B3C]">
-        <button
-          onClick={handleLikeToggle}
-          className={`flex-1 py-2 flex items-center justify-center space-x-2 text-sm rounded-xl hover:bg-neutral-100 dark:hover:bg-[#3A3B3C] transition ${
-            isLiked ? "text-[#1877F2] font-semibold" : "text-neutral-500 dark:text-[#B0B3B8]"
-          }`}
+        <div 
+          className="flex-1 relative"
+          onMouseEnter={() => {
+            if (panelTimeoutRef.current) clearTimeout(panelTimeoutRef.current);
+            setShowReactionPanel(true);
+          }}
+          onMouseLeave={() => {
+            panelTimeoutRef.current = setTimeout(() => {
+              setShowReactionPanel(false);
+            }, 800);
+          }}
         >
-          <ThumbsUp className="w-4.5 h-4.5" />
-          <span>Like</span>
-        </button>
+          {/* Reaction Floating Panel */}
+          <AnimatePresence>
+            {showReactionPanel && (
+              <motion.div
+                initial={{ opacity: 0, y: 15, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white dark:bg-[#242526] px-2 py-1.5 rounded-full shadow-xl border border-neutral-200 dark:border-neutral-800 flex items-center space-x-2.5 z-40"
+              >
+                {[
+                  { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" },
+                  { emoji: "❤️", label: "Love", color: "text-rose-500 font-bold" },
+                  { emoji: "🥰", label: "Care", color: "text-amber-500 font-bold" },
+                  { emoji: "😆", label: "Haha", color: "text-amber-500 font-bold" },
+                  { emoji: "😮", label: "Wow", color: "text-amber-500 font-bold" },
+                  { emoji: "😢", label: "Sad", color: "text-amber-500 font-bold" },
+                  { emoji: "😡", label: "Angry", color: "text-orange-500 font-bold" },
+                ].map((react, idx) => (
+                  <motion.button
+                    key={react.label}
+                    type="button"
+                    onClick={() => {
+                      setSelectedReaction(react);
+                      setShowReactionPanel(false);
+                      if (!isLiked) {
+                        handleLikeToggle();
+                      }
+                    }}
+                    whileHover={{ 
+                      scale: 1.45, 
+                      y: -12,
+                      transition: { type: "spring", stiffness: 400, damping: 10 }
+                    }}
+                    whileTap={{ scale: 0.8 }}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ 
+                      opacity: 1, 
+                      y: 0,
+                      transition: { delay: idx * 0.03 } 
+                    }}
+                    className="flex flex-col items-center justify-center cursor-pointer relative group/item"
+                  >
+                    <span className="text-2xl md:text-3xl select-none filter drop-shadow-sm leading-none">{react.emoji}</span>
+                    <span className="absolute -top-7 bg-neutral-900 text-white text-[9px] font-bold px-1.5 py-0.5 rounded opacity-0 group-hover/item:opacity-100 transition pointer-events-none capitalize">
+                      {react.label}
+                    </span>
+                  </motion.button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <motion.button
+            onClick={() => {
+              if (isLiked) {
+                setSelectedReaction(null);
+                handleLikeToggle();
+              } else {
+                setSelectedReaction({ emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" });
+                handleLikeToggle();
+              }
+            }}
+            whileTap={{ scale: 0.9 }}
+            className={`w-full py-2 flex items-center justify-center space-x-2 text-sm rounded-xl hover:bg-neutral-100 dark:hover:bg-[#3A3B3C] transition cursor-pointer ${
+              (selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))
+                ? (selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.color
+                : "text-neutral-500 dark:text-[#B0B3B8]"
+            }`}
+          >
+            {(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null)) ? (
+              <motion.span 
+                key={(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.label}
+                initial={{ scale: 0.4 }}
+                animate={{ scale: 1 }}
+                transition={{ type: "spring", stiffness: 300, damping: 12 }}
+                className="text-base select-none leading-none flex items-center"
+              >
+                {(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.emoji}
+              </motion.span>
+            ) : (
+              <ThumbsUp className="w-4.5 h-4.5" />
+            )}
+            <span className="capitalize">
+              {(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))
+                ? (selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.label
+                : "Like"}
+            </span>
+          </motion.button>
+        </div>
 
         <button
           onClick={() => setShowComments(!showComments)}
