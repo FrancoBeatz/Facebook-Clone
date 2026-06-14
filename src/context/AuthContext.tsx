@@ -94,7 +94,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentUser(user);
       if (user) {
         // Fetch/Sync profile
-        await refreshProfile();
+        try {
+          await refreshProfile();
+        } catch (error) {
+          console.warn("Could not retrieve or synchronize active user profile during initialize:", error);
+        }
       } else {
         setUserProfile(null);
       }

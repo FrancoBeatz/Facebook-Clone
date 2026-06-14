@@ -14,6 +14,10 @@ import { Profile } from "./pages/Profile";
 import { Messenger } from "./pages/Messenger";
 import { Friends } from "./pages/Friends";
 import { PostView } from "./pages/PostView";
+import { Bookmarks } from "./pages/Bookmarks";
+import { Groups } from "./pages/Groups";
+import { Pages } from "./pages/Pages";
+import { Admin } from "./pages/Admin";
 import { Sparkles } from "lucide-react";
 
 // Protected Route Guard
@@ -106,6 +110,38 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <PostView />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/bookmarks"
+              element={
+                <ProtectedRoute>
+                  <Bookmarks />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/groups"
+              element={
+                <ProtectedRoute>
+                  <Groups />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/pages"
+              element={
+                <ProtectedRoute>
+                  <Pages />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute>
+                  <Admin />
                 </ProtectedRoute>
               }
             />

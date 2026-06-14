@@ -1,13 +1,16 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 import firebaseConfig from "../../firebase-applet-config.json";
 
 const app = initializeApp(firebaseConfig);
 
-// CRITICAL: The app will break without specifying the custom firestoreDatabaseId
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// CRITICAL: The app will break without specifying the custom firestoreDatabaseId.
+// We also add experimentalForceLongPolling to bypass sandboxed iframe proxy/websocket errors.
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+}, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
@@ -37,8 +40,18 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const isPermissionDenied = 
+    errorMessage.toLowerCase().includes("permission") || 
+    (error && typeof error === "object" && "code" in error && String((error as any).code).includes("permission"));
+
+  if (!isPermissionDenied) {
+    console.warn(`Firestore operation '${operationType}' on path '${path}' encountered a non-permission error:`, error);
+    throw error instanceof Error ? error : new Error(errorMessage);
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage,
     authInfo: {
       userId: auth.currentUser?.uid || null,
       email: auth.currentUser?.email || null,

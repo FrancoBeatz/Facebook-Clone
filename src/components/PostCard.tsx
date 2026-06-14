@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { ThumbsUp, MessageSquare, Trash2, Send, CornerDownRight } from "lucide-react";
+import { ThumbsUp, MessageSquare, Trash2, Send, CornerDownRight, Bookmark, Flag } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { PostService } from "../services/post";
+import { BookmarkService } from "../services/bookmark";
+import { AdminService } from "../services/admin";
 import { NotificationService } from "../services/notification";
 import { Post, Comment } from "../types";
 
@@ -18,6 +20,19 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
   const [newCommentText, setNewCommentText] = useState("");
   const [replyTo, setReplyTo] = useState<string | null>(null); // commentId we are replying to
   const [replyText, setReplyText] = useState("");
+
+  const [isSaved, setIsSaved] = useState(false);
+  const [showReportForm, setShowReportForm] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+
+  // Handle bookmark tracking
+  useEffect(() => {
+    if (!userProfile) return;
+    const unsub = BookmarkService.listenToUserBookmarks(userProfile.uid, (list) => {
+      setIsSaved(list.some((b) => b.postId === post.postId));
+    });
+    return unsub;
+  }, [post.postId, userProfile]);
 
   // Handle like tracking
   useEffect(() => {
@@ -127,6 +142,39 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
     }
   };
 
+  const handleSaveToggle = async () => {
+    if (!userProfile) return;
+    try {
+      if (isSaved) {
+        await BookmarkService.unsavePost(userProfile.uid, post.postId);
+      } else {
+        await BookmarkService.savePost(userProfile.uid, post.postId);
+      }
+    } catch (e) {
+      console.error("Failed bookmark state swap:", e);
+    }
+  };
+
+  const handleReportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userProfile || !reportReason.trim()) return;
+
+    try {
+      await AdminService.reportContent(
+        userProfile.uid,
+        userProfile.fullName,
+        post.postId,
+        post.content,
+        reportReason.trim()
+      );
+      setReportReason("");
+      setShowReportForm(false);
+      alert("This post has been reported to administrators for review. Thank you!");
+    } catch (err) {
+      console.error("Failed moderation flag dispatch:", err);
+    }
+  };
+
   const handleDeleteComment = async (commentId: string) => {
     if (window.confirm("Are you sure you want to delete this comment?")) {
       try {
@@ -163,6 +211,18 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
           <div>
             <div className="font-sans font-bold text-neutral-900 dark:text-[#E4E6EB] text-sm group-hover:underline leading-snug">
               {post.authorName}
+              {post.groupName && (
+                <span className="text-xs text-neutral-500 font-normal">
+                  {" "}
+                  posted in <strong className="hover:underline text-[#1877F2]/90">{post.groupName}</strong>
+                </span>
+              )}
+              {post.pageName && !post.authorIsPage && (
+                <span className="text-xs text-neutral-500 font-normal">
+                  {" "}
+                  shared on <strong className="hover:underline text-indigo-500">{post.pageName}</strong>
+                </span>
+              )}
             </div>
             <div className="text-[11px] text-neutral-400 dark:text-[#B0B3B8] font-sans">
               {new Date(post.createdAt).toLocaleDateString([], {
@@ -175,17 +235,88 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
           </div>
         </Link>
 
-        {/* Delete Post Trigger if current user is owner */}
-        {userProfile && post.authorId === userProfile.uid && (
-          <button
-            onClick={handleDeletePost}
-            className="p-2 text-neutral-400 hover:text-red-500 hover:bg-neutral-100 dark:hover:bg-[#3A3B3C] rounded-full transition"
-            title="Delete Post"
-          >
-            <Trash2 className="w-4.5 h-4.5" />
-          </button>
-        )}
+        {/* Post Controls Header Section */}
+        <div className="flex items-center space-x-1">
+          {/* Bookmark Trigger */}
+          {userProfile && (
+            <button
+              onClick={handleSaveToggle}
+              className={`p-2 rounded-full transition ${
+                isSaved
+                  ? "text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/10"
+                  : "text-neutral-400 hover:text-amber-500 hover:bg-neutral-100 dark:hover:bg-[#3A3B3C]"
+              }`}
+              title={isSaved ? "Unsave Post" : "Save Post"}
+            >
+              <Bookmark className={`w-4.5 h-4.5 ${isSaved ? "fill-amber-500" : ""}`} />
+            </button>
+          )}
+
+          {/* Flag Report Trigger */}
+          {userProfile && post.authorId !== userProfile.uid && (
+            <button
+              onClick={() => setShowReportForm(!showReportForm)}
+              className={`p-2 rounded-full transition ${
+                showReportForm
+                  ? "text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/10"
+                  : "text-neutral-400 hover:text-rose-500 hover:bg-neutral-100 dark:hover:bg-[#3A3B3C]"
+              }`}
+              title="Report Post Content"
+            >
+              <Flag className="w-4.5 h-4.5" />
+            </button>
+          )}
+
+          {/* Delete Post Trigger if current user is owner */}
+          {userProfile && post.authorId === userProfile.uid && (
+            <button
+              onClick={handleDeletePost}
+              className="p-2 text-neutral-400 hover:text-red-500 hover:bg-neutral-100 dark:hover:bg-[#3A3B3C] rounded-full transition"
+              title="Delete Post"
+            >
+              <Trash2 className="w-4.5 h-4.5" />
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Collapsible Report Content Form */}
+      {showReportForm && (
+        <div className="mx-4 my-2 p-3 bg-rose-50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40 rounded-xl text-xs space-y-2 animate-slide-up">
+          <p className="font-bold text-rose-800 dark:text-rose-200">Flag this content for moderation</p>
+          <form onSubmit={handleReportSubmit} className="space-y-2">
+            <select
+              value={reportReason}
+              onChange={(e) => setReportReason(e.target.value)}
+              className="w-full h-8 px-2 bg-white dark:bg-[#3A3B3C] border border-neutral-300 dark:border-neutral-700 rounded-lg text-[11px]"
+              required
+            >
+              <option value="">Select reason...</option>
+              <option value="Spam or Unsolicited ad">Spam or Unsolicited ad</option>
+              <option value="Hate Speech or Harassment">Hate Speech or Harassment</option>
+              <option value="Nudity or Sensitive material">Nudity or Sensitive material</option>
+              <option value="Misinformation / Fake news">Misinformation / Fake news</option>
+              <option value="Violence / Self-harm">Violence / Self-harm</option>
+            </select>
+            <div className="flex justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setShowReportForm(false)}
+                className="px-2.5 py-1 border border-neutral-300 dark:border-neutral-700 rounded-lg text-[10px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={!reportReason}
+                className="px-3 py-1 bg-rose-600 text-white font-bold rounded-lg text-[10px]"
+              >
+                Submit Flag
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Post Content */}
       <div className="px-4 pb-3">

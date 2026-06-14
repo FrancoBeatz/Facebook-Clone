@@ -9,6 +9,9 @@ import {
   Calendar,
   Settings,
   HelpCircle,
+  Award,
+  Shield,
+  Layers,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -35,7 +38,7 @@ export const SidebarLeft: React.FC = () => {
               {userProfile.fullName[0].toUpperCase()}
             </div>
           )}
-          <span className="font-semibold text-neutral-900 dark:text-[#E4E6EB] text-sm">
+          <span className="font-semibold text-neutral-900 dark:text-[#E4E6EB] text-sm truncate">
             {userProfile.fullName}
           </span>
         </Link>
@@ -74,7 +77,7 @@ export const SidebarLeft: React.FC = () => {
         </Link>
       </div>
 
-      <div className="border-t border-neutral-200 dark:border-neutral-800 my-4 pt-4 whitespace-nowrap">
+      <div className="border-t border-neutral-200 dark:border-neutral-800 my-4 pt-4 whitespace-nowrap overflow-hidden">
         <h4 className="px-2 text-xs font-bold text-neutral-400 dark:text-[#B0B3B8] uppercase tracking-wider mb-2">
           Your Shortcuts
         </h4>
@@ -85,18 +88,39 @@ export const SidebarLeft: React.FC = () => {
             className="flex items-center space-x-3 p-2 rounded-xl hover:bg-neutral-200 dark:hover:bg-[#3A3B3C] transition"
           >
             <Bookmark className="w-5 h-5 text-amber-500" />
-            <span className="text-sm font-medium text-neutral-800 dark:text-neutral-300">
+            <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-300">
               Saved Posts
             </span>
           </Link>
 
           <Link
-            to="/events"
+            to="/groups"
             className="flex items-center space-x-3 p-2 rounded-xl hover:bg-neutral-200 dark:hover:bg-[#3A3B3C] transition"
           >
-            <Calendar className="w-5 h-5 text-red-500" />
-            <span className="text-sm font-medium text-neutral-800 dark:text-neutral-300">
-              Events
+            <Users className="w-5 h-5 text-cyan-500" />
+            <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-300">
+              Groups Hub
+            </span>
+          </Link>
+
+          <Link
+            to="/pages"
+            className="flex items-center space-x-3 p-2 rounded-xl hover:bg-neutral-200 dark:hover:bg-[#3A3B3C] transition"
+          >
+            <Award className="w-5 h-5 text-indigo-500" />
+            <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-300">
+              Business Pages
+            </span>
+          </Link>
+
+          {/* Admin link showing conditionally or always for fast dev review access */}
+          <Link
+            to="/admin"
+            className="flex items-center space-x-3 p-2 rounded-xl hover:bg-neutral-200 dark:hover:bg-[#3A3B3C] transition"
+          >
+            <Shield className="w-5 h-5 text-red-500" />
+            <span className="text-sm font-semibold text-neutral-800 dark:text-neutral-300">
+              Admin Dashboard
             </span>
           </Link>
         </div>
@@ -104,7 +128,7 @@ export const SidebarLeft: React.FC = () => {
 
       {/* Footer metadata */}
       <div className="px-2 pt-6 text-[11px] text-neutral-400 dark:text-neutral-500 space-y-1">
-        <p>Privacy · Terms · Advertising · Cookies · Ad choices · Facebook Clone © 2026</p>
+        <p>Privacy · Terms · Facebook Clone © 2026</p>
       </div>
     </aside>
   );

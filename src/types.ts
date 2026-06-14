@@ -9,6 +9,16 @@ export interface UserProfile {
   profilePicture?: string;
   coverPhoto?: string;
   createdAt: string;
+  
+  // Custom metrics/fields for Facebook clone features
+  work?: string;
+  education?: string;
+  interests?: string;
+  role?: "admin" | "user";
+  suspended?: boolean;
+  lastActive?: string;
+  deviceType?: string;
+  loginHistory?: string[]; // array of ISO datetimes
 }
 
 export interface Post {
@@ -21,6 +31,14 @@ export interface Post {
   likes: string[]; // List of userUids
   commentsCount: number;
   createdAt: string;
+
+  // Add group & page fields
+  groupId?: string;
+  groupName?: string;
+  pageId?: string;
+  pageName?: string;
+  pageAvatar?: string;
+  authorIsPage?: boolean;
 }
 
 export interface Comment {
@@ -69,3 +87,48 @@ export interface Relationship {
   status: "requested" | "friends";
   createdAt: string;
 }
+
+// FB clone - Groups
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+  coverPhoto?: string;
+  ownerId: string;
+  members: string[]; // list of user uids
+  createdAt: string;
+}
+
+// FB clone - Business Pages
+export interface BusinessPage {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  profilePicture?: string;
+  coverPhoto?: string;
+  ownerId: string;
+  followers: string[]; // list of user uids
+  createdAt: string;
+}
+
+// FB clone - Saved posts (Bookmarks)
+export interface Bookmark {
+  id: string; // unique reservation
+  userId: string;
+  postId: string;
+  createdAt: string;
+}
+
+// FB clone - Activity tracking & Reports for admin
+export interface Report {
+  id: string;
+  reporterId: string;
+  reporterName: string;
+  postId?: string;
+  postContent?: string;
+  reason: string;
+  createdAt: string;
+  status: "pending" | "resolved";
+}
+

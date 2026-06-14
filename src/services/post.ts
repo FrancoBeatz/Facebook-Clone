@@ -24,7 +24,15 @@ export const PostService = {
     authorName: string,
     authorAvatar: string,
     content: string,
-    imageFiles: File[] = []
+    imageFiles: File[] = [],
+    extraParams?: {
+      groupId?: string;
+      groupName?: string;
+      pageId?: string;
+      pageName?: string;
+      pageAvatar?: string;
+      authorIsPage?: boolean;
+    }
   ): Promise<void> {
     const postRef = doc(collection(db, "posts"));
     const path = `posts/${postRef.id}`;
@@ -50,6 +58,7 @@ export const PostService = {
         likes: [],
         commentsCount: 0,
         createdAt: new Date().toISOString(),
+        ...(extraParams || {}),
       };
 
       const batch = writeBatch(db);

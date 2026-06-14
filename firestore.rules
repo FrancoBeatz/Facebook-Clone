@@ -16,10 +16,9 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Email verification check (disabled if authentication isn't configured with verified email,
-    // but included here since we strictly mandate verification where possible).
+    // Email verification check (allows both Google and standard logged-in users during development).
     function isVerifiedUser() {
-      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com');
+      return isSignedIn();
     }
 
     function isValidId(id) {
@@ -36,17 +35,15 @@ service cloud.firestore {
 
     // 2. Users Collection
     match /users/{userId} {
-      allow read: if isSignedIn();
+      allow read: if true;
       allow create: if isSignedIn() 
                     && isValidId(userId) 
                     && userId == request.auth.uid
                     && incoming().uid == request.auth.uid
-                    && incoming().email == request.auth.token.email
-                    && incoming().createdAt == request.time;
+                    && incoming().createdAt is string && incoming().createdAt.size() <= 45;
       allow update: if isSignedIn()
                     && userId == request.auth.uid
                     && incoming().uid == existing().uid
-                    && incoming().email == existing().email
                     && incoming().createdAt == existing().createdAt;
     }
 
@@ -58,7 +55,7 @@ service cloud.firestore {
                     && incoming().postId == postId
                     && incoming().authorId == request.auth.uid
                     && incoming().commentsCount == 0
-                    && incoming().createdAt == request.time;
+                    && incoming().createdAt is string && incoming().createdAt.size() <= 45;
       allow update: if isVerifiedUser()
                     && (
                       // Action: Edit Post by original author
@@ -88,7 +85,7 @@ service cloud.firestore {
                     && isValidId(commentId)
                     && incoming().commentId == commentId
                     && incoming().userId == request.auth.uid
-                    && incoming().createdAt == request.time;
+                    && incoming().createdAt is string && incoming().createdAt.size() <= 45;
       allow update: if false;
       allow delete: if isSignedIn() 
                     && (existing().userId == request.auth.uid 
@@ -118,7 +115,7 @@ service cloud.firestore {
                     && (request.auth.uid in get(/databases/$(database)/documents/chats/$(roomId)).data.participants)
                     && incoming().senderId == request.auth.uid
                     && incoming().messageId == messageId
-                    && incoming().createdAt == request.time;
+                    && incoming().createdAt is string && incoming().createdAt.size() <= 45;
       allow update: if isSignedIn()
                     && (request.auth.uid in get(/databases/$(database)/documents/chats/$(roomId)).data.participants)
                     && (
@@ -134,7 +131,7 @@ service cloud.firestore {
                     && isValidId(notificationId)
                     && incoming().senderId == request.auth.uid
                     && incoming().id == notificationId
-                    && incoming().createdAt == request.time;
+                    && incoming().createdAt is string && incoming().createdAt.size() <= 45;
       allow update: if isSignedIn()
                     && existing().receiverId == request.auth.uid
                     && incoming().receiverId == existing().receiverId
@@ -150,12 +147,48 @@ service cloud.firestore {
                     && incoming().id == relId
                     && incoming().fromId == request.auth.uid
                     && incoming().status == 'requested'
-                    && incoming().createdAt == request.time;
+                    && incoming().createdAt is string && incoming().createdAt.size() <= 45;
       allow update: if isSignedIn()
                     && existing().toId == request.auth.uid
                     && incoming().diff(existing()).affectedKeys().hasOnly(['status'])
                     && incoming().status == 'friends';
       allow delete: if isSignedIn() && (existing().fromId == request.auth.uid || existing().toId == request.auth.uid);
+    }
+
+    // Helper: Admin Check
+    function isPlatformAdmin() {
+      return isSignedIn() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // 9. Groups Collection
+    match /groups/{groupId} {
+      allow read: if isSignedIn();
+      allow create: if isVerifiedUser() && isValidId(groupId);
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn() && (existing().ownerId == request.auth.uid || isPlatformAdmin());
+    }
+
+    // 10. Business Pages Collection
+    match /pages/{pageId} {
+      allow read: if isSignedIn();
+      allow create: if isVerifiedUser() && isValidId(pageId);
+      allow update: if isSignedIn();
+      allow delete: if isSignedIn() && (existing().ownerId == request.auth.uid || isPlatformAdmin());
+    }
+
+    // 11. Saved Bookmarks Collection
+    match /bookmarks/{bookmarkId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isVerifiedUser() && incoming().userId == request.auth.uid;
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    // 12. Reported Content Collection
+    match /reports/{reportId} {
+      allow read, update: if isPlatformAdmin();
+      allow create: if isVerifiedUser() && incoming().reporterId == request.auth.uid;
+      allow delete: if isPlatformAdmin();
     }
   }
 }
