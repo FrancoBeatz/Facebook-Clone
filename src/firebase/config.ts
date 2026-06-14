@@ -7,10 +7,11 @@ import firebaseConfig from "../../firebase-applet-config.json";
 const app = initializeApp(firebaseConfig);
 
 // CRITICAL: The app will break without specifying the custom firestoreDatabaseId.
-// We also add experimentalForceLongPolling to bypass sandboxed iframe proxy/websocket errors.
+// We also add experimentalForceLongPolling and useFetchStreams: false to bypass sandboxed iframe proxy/websocket errors and streaming issues.
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
-}, firebaseConfig.firestoreDatabaseId);
+  useFetchStreams: false,
+} as any, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
