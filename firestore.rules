@@ -1,0 +1,161 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global safety net (default deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reuseable global functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Email verification check (disabled if authentication isn't configured with verified email,
+    // but included here since we strictly mandate verification where possible).
+    function isVerifiedUser() {
+      return isSignedIn() && (request.auth.token.email_verified == true || request.auth.token.firebase.sign_in_provider == 'google.com');
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Users Collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() 
+                    && isValidId(userId) 
+                    && userId == request.auth.uid
+                    && incoming().uid == request.auth.uid
+                    && incoming().email == request.auth.token.email
+                    && incoming().createdAt == request.time;
+      allow update: if isSignedIn()
+                    && userId == request.auth.uid
+                    && incoming().uid == existing().uid
+                    && incoming().email == existing().email
+                    && incoming().createdAt == existing().createdAt;
+    }
+
+    // 3. Posts Collection
+    match /posts/{postId} {
+      allow read: if isSignedIn();
+      allow create: if isVerifiedUser()
+                    && isValidId(postId)
+                    && incoming().postId == postId
+                    && incoming().authorId == request.auth.uid
+                    && incoming().commentsCount == 0
+                    && incoming().createdAt == request.time;
+      allow update: if isVerifiedUser()
+                    && (
+                      // Action: Edit Post by original author
+                      (existing().authorId == request.auth.uid 
+                       && incoming().authorId == request.auth.uid 
+                       && incoming().postId == existing().postId 
+                       && incoming().createdAt == existing().createdAt 
+                       && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'images', 'updatedAt'])) ||
+                      // Action: Like/Unlike Post (any user can modify likes)
+                      (incoming().authorId == existing().authorId 
+                       && incoming().postId == existing().postId 
+                       && incoming().createdAt == existing().createdAt 
+                       && incoming().diff(existing()).affectedKeys().hasOnly(['likes'])) ||
+                      // Action: Modify commentsCount
+                      (incoming().authorId == existing().authorId 
+                       && incoming().postId == existing().postId 
+                       && incoming().createdAt == existing().createdAt 
+                       && incoming().diff(existing()).affectedKeys().hasOnly(['commentsCount']))
+                    );
+      allow delete: if isSignedIn() && existing().authorId == request.auth.uid;
+    }
+
+    // 4. Comments Subcollection
+    match /posts/{postId}/comments/{commentId} {
+      allow read: if isSignedIn();
+      allow create: if isVerifiedUser()
+                    && isValidId(commentId)
+                    && incoming().commentId == commentId
+                    && incoming().userId == request.auth.uid
+                    && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSignedIn() 
+                    && (existing().userId == request.auth.uid 
+                        || get(/databases/$(database)/documents/posts/$(postId)).data.authorId == request.auth.uid);
+    }
+
+    // 5. Chat Rooms Collection
+    match /chats/{roomId} {
+      allow read: if isSignedIn() && (request.auth.uid in resource.data.participants);
+      allow create: if isVerifiedUser()
+                    && isValidId(roomId)
+                    && (request.auth.uid in incoming().participants);
+      allow update: if isSignedIn()
+                    && (request.auth.uid in existing().participants)
+                    && incoming().participants == existing().participants
+                    && (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'lastMessageAt', 'typing'])
+                    );
+      allow delete: if false;
+    }
+
+    // 6. Messages within Chat Rooms
+    match /chats/{roomId}/messages/{messageId} {
+      allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/chats/$(roomId)).data.participants);
+      allow create: if isVerifiedUser()
+                    && isValidId(messageId)
+                    && (request.auth.uid in get(/databases/$(database)/documents/chats/$(roomId)).data.participants)
+                    && incoming().senderId == request.auth.uid
+                    && incoming().messageId == messageId
+                    && incoming().createdAt == request.time;
+      allow update: if isSignedIn()
+                    && (request.auth.uid in get(/databases/$(database)/documents/chats/$(roomId)).data.participants)
+                    && (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'seenBy'])
+                    );
+      allow delete: if false;
+    }
+
+    // 7. Notifications Collection
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && resource.data.receiverId == request.auth.uid;
+      allow create: if isVerifiedUser()
+                    && isValidId(notificationId)
+                    && incoming().senderId == request.auth.uid
+                    && incoming().id == notificationId
+                    && incoming().createdAt == request.time;
+      allow update: if isSignedIn()
+                    && existing().receiverId == request.auth.uid
+                    && incoming().receiverId == existing().receiverId
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+      allow delete: if isSignedIn() && existing().receiverId == request.auth.uid;
+    }
+
+    // 8. Relationships / Friends Collection
+    match /relationships/{relId} {
+      allow read: if isSignedIn() && (resource.data.fromId == request.auth.uid || resource.data.toId == request.auth.uid);
+      allow create: if isVerifiedUser()
+                    && isValidId(relId)
+                    && incoming().id == relId
+                    && incoming().fromId == request.auth.uid
+                    && incoming().status == 'requested'
+                    && incoming().createdAt == request.time;
+      allow update: if isSignedIn()
+                    && existing().toId == request.auth.uid
+                    && incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+                    && incoming().status == 'friends';
+      allow delete: if isSignedIn() && (existing().fromId == request.auth.uid || existing().toId == request.auth.uid);
+    }
+  }
+}

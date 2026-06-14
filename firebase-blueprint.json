@@ -1,0 +1,141 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile database object representing Facebook clone user account",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "fullName": { "type": "string" },
+        "username": { "type": "string" },
+        "email": { "type": "string" },
+        "bio": { "type": "string" },
+        "location": { "type": "string" },
+        "website": { "type": "string" },
+        "profilePicture": { "type": "string" },
+        "coverPhoto": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "fullName", "username", "email", "createdAt"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "A user-created post containing text and optional multiple images",
+      "type": "object",
+      "properties": {
+        "postId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorAvatar": { "type": "string" },
+        "content": { "type": "string" },
+        "images": { "type": "array" },
+        "likes": { "type": "array" },
+        "commentsCount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["postId", "authorId", "authorName", "content", "commentsCount", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "A comment on a post",
+      "type": "object",
+      "properties": {
+        "commentId": { "type": "string" },
+        "userId": { "type": "string" },
+        "username": { "type": "string" },
+        "profileImage": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["commentId", "userId", "username", "text", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message in a room",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "image": { "type": "string" },
+        "reactions": { "type": "object" },
+        "seenBy": { "type": "array" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["messageId", "senderId", "createdAt"]
+    },
+    "ChatRoom": {
+      "title": "ChatRoom",
+      "description": "A chat conversation between users",
+      "type": "object",
+      "properties": {
+        "roomId": { "type": "string" },
+        "participants": { "type": "array" },
+        "lastMessage": { "type": "string" },
+        "lastMessageAt": { "type": "string" },
+        "typing": { "type": "object" }
+      },
+      "required": ["roomId", "participants"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "A notification sent to a user for actions like like, comment, request, etc",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderAvatar": { "type": "string" },
+        "postId": { "type": "string" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "type", "receiverId", "senderId", "senderName", "isRead", "createdAt"]
+    },
+    "Relationship": {
+      "title": "Relationship",
+      "description": "Friendship state between two users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fromId": { "type": "string" },
+        "toId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "fromId", "toId", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "Users of the application"
+    },
+    "posts": {
+      "schema": "Post",
+      "description": "User posts in feed"
+    },
+    "posts/{postId}/comments": {
+      "schema": "Comment",
+      "description": "Post comments"
+    },
+    "chats": {
+      "schema": "ChatRoom",
+      "description": "Chat sessions channels"
+    },
+    "chats/{roomId}/messages": {
+      "schema": "Message",
+      "description": "Chat session message history"
+    },
+    "notifications": {
+      "schema": "Notification",
+      "description": "App notifications"
+    },
+    "relationships": {
+      "schema": "Relationship",
+      "description": "Friendship states (requested, friends)"
+    }
+  }
+}
