@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { ThumbsUp, MessageSquare, Trash2, Send, CornerDownRight, Bookmark, Flag } from "lucide-react";
+import { ThumbsUp, MessageSquare, Trash2, Send, CornerDownRight, Bookmark, Flag, Share2, AlertTriangle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useAuth } from "../context/AuthContext";
 import { PostService } from "../services/post";
@@ -9,13 +9,20 @@ import { AdminService } from "../services/admin";
 import { NotificationService } from "../services/notification";
 import { Post, Comment } from "../types";
 
+const REACTION_MAP: Record<string, { emoji: string; label: string; color: string }> = {
+  like: { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" },
+  love: { emoji: "❤️", label: "Love", color: "text-rose-500 font-bold" },
+  care: { emoji: "🥰", label: "Care", color: "text-amber-500 font-bold" },
+  haha: { emoji: "😆", label: "Haha", color: "text-amber-500 font-semibold" },
+  wow: { emoji: "😮", label: "Wow", color: "text-amber-500 font-semibold" },
+};
+
 interface PostCardProps {
   post: Post;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({ post }) => {
   const { userProfile } = useAuth();
-  const [isLiked, setIsLiked] = useState(false);
   const [comments, setComments] = useState<Comment[]>([]);
   const [showComments, setShowComments] = useState(false);
   const [newCommentText, setNewCommentText] = useState("");
@@ -26,8 +33,18 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
   const [showReportForm, setShowReportForm] = useState(false);
   const [reportReason, setReportReason] = useState("");
 
-  // Facebook Reactions state
-  const [selectedReaction, setSelectedReaction] = useState<{ emoji: string; label: string; color: string } | null>(null);
+  const [sharedCopied, setSharedCopied] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Active Real-Time Reaction tracker
+  const activeReactionKey = userProfile && post.reactions
+    ? Object.keys(post.reactions).find((k) => post.reactions![k]?.includes(userProfile.uid))
+    : null;
+
+  const isLiked = userProfile && post.likes ? post.likes.includes(userProfile.uid) : false;
+
+  // Facebook Reactions panel activation state
   const [showReactionPanel, setShowReactionPanel] = useState(false);
   const panelTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -47,13 +64,6 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
     return unsub;
   }, [post.postId, userProfile]);
 
-  // Handle like tracking
-  useEffect(() => {
-    if (userProfile && post.likes) {
-      setIsLiked(post.likes.includes(userProfile.uid));
-    }
-  }, [post.likes, userProfile]);
-
   // Subscribe to comments
   useEffect(() => {
     if (!showComments) return;
@@ -66,11 +76,10 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
   const handleLikeToggle = async () => {
     if (!userProfile) return;
     try {
-      if (isLiked) {
-        await PostService.unlikePost(post.postId, userProfile.uid);
+      if (activeReactionKey) {
+        await PostService.reactToPost(post.postId, userProfile.uid, "");
       } else {
-        await PostService.likePost(post.postId, userProfile.uid);
-        // Dispatch Notification
+        await PostService.reactToPost(post.postId, userProfile.uid, "like");
         await NotificationService.createNotification(
           "like",
           post.authorId,
@@ -82,6 +91,43 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
       }
     } catch (err) {
       console.error("Failed standard like toggler action:", err);
+    }
+  };
+
+  const handleSharePost = async () => {
+    const postUrl = `${window.location.origin}/post/${post.postId}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `Post by ${post.authorName}`,
+          text: post.content,
+          url: postUrl,
+        });
+      } else {
+        await navigator.clipboard.writeText(postUrl);
+        setSharedCopied(true);
+        setTimeout(() => setSharedCopied(false), 2000);
+      }
+    } catch (err) {
+      try {
+        await navigator.clipboard.writeText(postUrl);
+        setSharedCopied(true);
+        setTimeout(() => setSharedCopied(false), 2000);
+      } catch (err2) {
+        console.error("Clipboard copy failed:", err2);
+      }
+    }
+  };
+
+  const handleConfirmedDelete = async () => {
+    setDeleting(true);
+    try {
+      await PostService.deletePost(post.postId);
+      setShowDeleteConfirm(false);
+    } catch (err) {
+      console.error("Failed to delete post:", err);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -145,14 +191,8 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
     }
   };
 
-  const handleDeletePost = async () => {
-    if (window.confirm("Are you sure you want to delete this post?")) {
-      try {
-        await PostService.deletePost(post.postId);
-      } catch (err) {
-        console.error("Failed to delete post:", err);
-      }
-    }
+  const handleDeletePost = () => {
+    setShowDeleteConfirm(true);
   };
 
   const handleSaveToggle = async () => {
@@ -367,11 +407,24 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
       {/* Post Metrics Stats */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-100 dark:border-[#3A3B3C] text-xs text-neutral-400 dark:text-[#B0B3B8]">
         <div className="flex items-center space-x-1.5">
-          <div className="w-4.5 h-4.5 rounded-full bg-[#1877F2] flex items-center justify-center text-white text-[9px] font-bold">
-            👍
+          {/* Reaction icons stack summary */}
+          <div className="flex items-center -space-x-1">
+            {post.reactions && Object.keys(post.reactions).map((key) => {
+              const count = post.reactions![key]?.length || 0;
+              if (count === 0) return null;
+              const emoji = REACTION_MAP[key]?.emoji || "👍";
+              return (
+                <span key={key} className="text-xs select-none filter drop-shadow-sm brightness-110" title={`${key}: ${count}`}>
+                  {emoji}
+                </span>
+              );
+            })}
+            {(!post.reactions || Object.values(post.reactions).every((arr: any) => Array.isArray(arr) && arr.length === 0)) && (post.likes?.length || 0) > 0 && (
+              <span className="text-xs select-none">👍</span>
+            )}
           </div>
           <span className="font-sans">
-            {post.likes ? post.likes.length : 0} {post.likes?.length === 1 ? "like" : "likes"}
+            {post.likes ? post.likes.length : 0} {post.likes?.length === 1 ? "reaction" : "reactions"}
           </span>
         </div>
 
@@ -394,7 +447,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
             }, 800);
           }}
         >
-          {/* Reaction Floating Panel */}
+          {/* Reaction Floating Panel with smooth spring and bounce effects */}
           <AnimatePresence>
             {showReactionPanel && (
               <motion.div
@@ -402,33 +455,25 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 transition={{ type: "spring", stiffness: 350, damping: 25 }}
-                className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white dark:bg-[#242526] px-2 py-1.5 rounded-full shadow-xl border border-neutral-200 dark:border-neutral-800 flex items-center space-x-2.5 z-40"
+                className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white dark:bg-[#242526] px-2.5 py-1.5 rounded-full shadow-xl border border-neutral-200 dark:border-neutral-800 flex items-center space-x-2.5 z-40"
               >
-                {[
-                  { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" },
-                  { emoji: "❤️", label: "Love", color: "text-rose-500 font-bold" },
-                  { emoji: "🥰", label: "Care", color: "text-amber-500 font-bold" },
-                  { emoji: "😆", label: "Haha", color: "text-amber-500 font-bold" },
-                  { emoji: "😮", label: "Wow", color: "text-amber-500 font-bold" },
-                  { emoji: "😢", label: "Sad", color: "text-amber-500 font-bold" },
-                  { emoji: "😡", label: "Angry", color: "text-orange-500 font-bold" },
-                ].map((react, idx) => (
+                {Object.entries(REACTION_MAP).map(([key, react], idx) => (
                   <motion.button
-                    key={react.label}
+                    key={key}
                     type="button"
                     onClick={() => {
-                      setSelectedReaction(react);
-                      setShowReactionPanel(false);
-                      if (!isLiked) {
-                        handleLikeToggle();
+                      if (userProfile) {
+                        PostService.reactToPost(post.postId, userProfile.uid, activeReactionKey === key ? "" : key);
                       }
+                      setShowReactionPanel(false);
                     }}
                     whileHover={{ 
                       scale: 1.45, 
                       y: -12,
+                      rotate: [0, -10, 10, 0],
                       transition: { type: "spring", stiffness: 400, damping: 10 }
                     }}
-                    whileTap={{ scale: 0.8 }}
+                    whileTap={{ scale: 0.8, rotate: 10 }}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ 
                       opacity: 1, 
@@ -437,7 +482,7 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
                     }}
                     className="flex flex-col items-center justify-center cursor-pointer relative group/item"
                   >
-                    <span className="text-2xl md:text-3xl select-none filter drop-shadow-sm leading-none">{react.emoji}</span>
+                    <span className="text-2.5xl md:text-3xl select-none filter drop-shadow-sm leading-none">{react.emoji}</span>
                     <span className="absolute -top-7 bg-neutral-900 text-white text-[9px] font-bold px-1.5 py-0.5 rounded opacity-0 group-hover/item:opacity-100 transition pointer-events-none capitalize">
                       {react.label}
                     </span>
@@ -449,38 +494,45 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
 
           <motion.button
             onClick={() => {
-              if (isLiked) {
-                setSelectedReaction(null);
-                handleLikeToggle();
+              if (!userProfile) return;
+              if (activeReactionKey) {
+                PostService.reactToPost(post.postId, userProfile.uid, "");
               } else {
-                setSelectedReaction({ emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" });
-                handleLikeToggle();
+                PostService.reactToPost(post.postId, userProfile.uid, "like");
               }
             }}
             whileTap={{ scale: 0.9 }}
             className={`w-full py-2 flex items-center justify-center space-x-2 text-sm rounded-xl hover:bg-neutral-100 dark:hover:bg-[#3A3B3C] transition cursor-pointer ${
-              (selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))
-                ? (selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.color
+              activeReactionKey
+                ? REACTION_MAP[activeReactionKey]?.color
+                : isLiked
+                ? "text-[#1877F2] font-semibold"
                 : "text-neutral-500 dark:text-[#B0B3B8]"
             }`}
           >
-            {(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null)) ? (
+            {activeReactionKey ? (
               <motion.span 
-                key={(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.label}
+                key={activeReactionKey}
                 initial={{ scale: 0.4 }}
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", stiffness: 300, damping: 12 }}
                 className="text-base select-none leading-none flex items-center"
               >
-                {(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.emoji}
+                {REACTION_MAP[activeReactionKey]?.emoji}
+              </motion.span>
+            ) : isLiked ? (
+              <motion.span 
+                initial={{ scale: 0.4 }}
+                animate={{ scale: 1 }}
+                className="text-base select-none leading-none flex items-center"
+              >
+                👍
               </motion.span>
             ) : (
               <ThumbsUp className="w-4.5 h-4.5" />
             )}
             <span className="capitalize">
-              {(selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))
-                ? (selectedReaction || (isLiked ? { emoji: "👍", label: "Like", color: "text-[#1877F2] font-semibold" } : null))!.label
-                : "Like"}
+              {activeReactionKey ? REACTION_MAP[activeReactionKey]?.label : "Like"}
             </span>
           </motion.button>
         </div>
@@ -493,6 +545,19 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
         >
           <MessageSquare className="w-4.5 h-4.5" />
           <span>Comment</span>
+        </button>
+
+        <button
+          onClick={handleSharePost}
+          className={`flex-1 py-2 flex items-center justify-center space-x-2 text-sm rounded-xl transition ${
+            sharedCopied 
+              ? "text-emerald-500 font-bold bg-emerald-500/10 dark:bg-emerald-950/15" 
+              : "text-neutral-500 dark:text-[#B0B3B8] hover:bg-neutral-100 dark:hover:bg-[#3A3B3C] hover:text-emerald-500"
+          }`}
+          title="Generate sharing web link"
+        >
+          <Share2 className="w-4.5 h-4.5" />
+          <span>{sharedCopied ? "Copied!" : "Share"}</span>
         </button>
       </div>
 
@@ -637,6 +702,52 @@ export const PostCard: React.FC<PostCardProps> = ({ post }) => {
           )}
         </div>
       )}
+      
+      {/* Absolute Overlay custom alert confirmation modal */}
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-neutral-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              transition={{ type: "spring", stiffness: 380, damping: 28 }}
+              className="bg-white dark:bg-[#1C1D1E] rounded-2xl p-6 max-w-sm w-full border border-neutral-200 dark:border-neutral-800 shadow-2xl space-y-4"
+            >
+              <div className="flex items-center space-x-3 text-red-500">
+                <AlertTriangle className="w-6 h-6 animate-pulse shrink-0" />
+                <h3 className="text-base font-extrabold text-neutral-900 dark:text-neutral-100">Delete Post?</h3>
+              </div>
+              <p className="text-xs text-neutral-500 dark:text-[#B0B3B8] leading-relaxed">
+                This action is irreversible. This post's content, media items, comment threads, and reaction counts will be permanently removed.
+              </p>
+              <div className="flex justify-end space-x-2 pt-1.5">
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-3.5 py-2 border border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 rounded-xl text-[11px] font-bold hover:bg-neutral-50 dark:hover:bg-neutral-800 transition disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={handleConfirmedDelete}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-extrabold rounded-xl text-[11px] shadow-sm transition disabled:opacity-50"
+                >
+                  {deleting ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </article>
   );
 };

@@ -137,6 +137,51 @@ export const PostService = {
     }
   },
 
+  async reactToPost(postId: string, userId: string, reactionType: string): Promise<void> {
+    const path = `posts/${postId}`;
+    try {
+      const docRef = doc(db, "posts", postId);
+      const postSnap = await getDoc(docRef);
+      if (!postSnap.exists()) return;
+      const data = postSnap.data();
+      const oldReactions = data.reactions || {};
+      const oldLikes = data.likes || [];
+      
+      const updatedReactions: Record<string, string[]> = {};
+      const keys = ["like", "love", "haha", "wow", "care"];
+      keys.forEach((k) => {
+        const arr = oldReactions[k] || [];
+        updatedReactions[k] = arr.filter((u: string) => u !== userId);
+      });
+
+      if (reactionType) {
+        if (!updatedReactions[reactionType]) {
+          updatedReactions[reactionType] = [];
+        }
+        updatedReactions[reactionType].push(userId);
+        
+        // Sync to standard likes array for backwards compatibility
+        let nextLikes = [...oldLikes];
+        if (!nextLikes.includes(userId)) {
+          nextLikes.push(userId);
+        }
+        await updateDoc(docRef, {
+          reactions: updatedReactions,
+          likes: nextLikes
+        });
+      } else {
+        // Remove reaction
+        let nextLikes = oldLikes.filter((u: string) => u !== userId);
+        await updateDoc(docRef, {
+          reactions: updatedReactions,
+          likes: nextLikes
+        });
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  },
+
   async unlikePost(postId: string, userId: string): Promise<void> {
     const path = `posts/${postId}`;
     try {

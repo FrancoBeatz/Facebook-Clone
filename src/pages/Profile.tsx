@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { Camera, MapPin, Globe, Edit3, UserPlus, UserMinus, UserCheck, MessageSquare, Plus, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -11,7 +11,25 @@ import { PostService } from "../services/post";
 import { HighlightService } from "../services/highlight";
 import { UserProfile, Relationship, Post, Highlight } from "../types";
 import { PostCard } from "../components/PostCard";
-import { PostSkeleton } from "../components/Skeleton";
+import { PostSkeleton, ProfileSkeleton } from "../components/Skeleton";
+import { EngagementDashboard } from "../components/EngagementDashboard";
+
+function dataURLtoFile(dataurl: string, filename: string): File {
+  try {
+    const arr = dataurl.split(",");
+    const mime = arr[0].match(/:(.*?);/)?.[1] || "";
+    const bstr = atob(arr[arr.length - 1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mime });
+  } catch (e) {
+    console.error("Error decoding base64 file", e);
+    return new File([], filename);
+  }
+}
 
 export const Profile: React.FC = () => {
   const { userId } = useParams<{ userId: string }>();
@@ -26,6 +44,77 @@ export const Profile: React.FC = () => {
   
   const [loading, setLoading] = useState(true);
   const [uploadingType, setUploadingType] = useState<"profile" | "cover" | null>(null);
+
+  // Camera settings modal capture states
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const startCamera = async () => {
+    try {
+      setCapturedImage(null);
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 400, height: 400, facingMode: "user" },
+        audio: false
+      });
+      setLocalStream(stream);
+      setCameraActive(true);
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      }, 100);
+    } catch (err) {
+      console.error("Camera access failed", err);
+      alert("Could not access camera. Please make sure camera hardware is active and connected.");
+    }
+  };
+
+  const stopCamera = () => {
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+      setLocalStream(null);
+    }
+    setCameraActive(false);
+  };
+
+  const capturePhoto = () => {
+    if (videoRef.current) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 400;
+      canvas.height = 400;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.translate(400, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(videoRef.current, 0, 0, 400, 400);
+        const dataUrl = canvas.toDataURL("image/jpeg");
+        setCapturedImage(dataUrl);
+      }
+      stopCamera();
+    }
+  };
+
+  const saveLivePhoto = async () => {
+    if (!capturedImage || !currentUser) return;
+    setUploadingType("profile");
+    try {
+      const file = dataURLtoFile(capturedImage, `captured_profile_${Date.now()}.jpg`);
+      const downloadUrl = await UserService.uploadPhoto(currentUser.uid, file, "profile");
+      await refreshProfile();
+      setProfile((prev) =>
+        prev ? { ...prev, profilePicture: downloadUrl } : null
+      );
+      setShowPhotoModal(false);
+      setCapturedImage(null);
+    } catch (err) {
+      console.error("Error saving live camera profile snapshot:", err);
+    } finally {
+      setUploadingType(null);
+    }
+  };
 
   // Edit Mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -292,12 +381,7 @@ export const Profile: React.FC = () => {
     : [];
 
   if (loading) {
-    return (
-      <div className="max-w-4xl mx-auto py-12 px-4 space-y-6">
-        <div className="h-64 bg-neutral-200 dark:bg-neutral-800 rounded-xl animate-pulse" />
-        <PostSkeleton />
-      </div>
-    );
+    return <ProfileSkeleton />;
   }
 
   if (!profile) {
@@ -349,10 +433,13 @@ export const Profile: React.FC = () => {
             )}
 
             {isMyProfile && (
-              <label className="absolute bottom-1 right-1 bg-[#242526] text-[#E4E6EB] p-2 hover:brightness-110 rounded-full border border-neutral-700 cursor-pointer shadow transition">
+              <button
+                type="button"
+                onClick={() => setShowPhotoModal(true)}
+                className="absolute bottom-1 right-1 bg-[#242526] text-[#E4E6EB] p-2 hover:brightness-110 rounded-full border border-neutral-700 cursor-pointer shadow transition"
+              >
                 <Camera className="w-4 h-4" />
-                <input type="file" onChange={(e) => handlePhotoUpload(e, "profile")} accept="image/*" className="hidden" />
-              </label>
+              </button>
             )}
           </div>
 
@@ -930,28 +1017,49 @@ export const Profile: React.FC = () => {
               </span>
             </div>
 
-            <div className="space-y-2 pt-2 border-t border-neutral-100 dark:border-neutral-800/60">
-              <span className="text-xs font-bold text-neutral-500 dark:text-neutral-300 block">Achievements Badges</span>
+            <div className="space-y-2.5 pt-2 border-t border-neutral-100 dark:border-neutral-800/60">
+              <span className="text-xs font-bold text-neutral-500 dark:text-neutral-300 block">Achievements & Milestones</span>
               <div className="flex flex-wrap gap-2">
                 {[
-                  { name: "First Post", emoji: "📝", desc: "First published post", unlocked: (profile.achievements || []).includes("First Post") },
-                  { name: "First Friend", emoji: "🤝", desc: "Connected with a peer", unlocked: (profile.achievements || []).includes("First Friend") },
-                  { name: "Top Creator", emoji: "👑", desc: "Level Creator unlocked", unlocked: (profile.achievements || []).includes("Top Creator") },
-                  { name: "Social Butterfly", emoji: "🦋", desc: "Level Influencer unlocked", unlocked: (profile.achievements || []).includes("Social Butterfly") },
-                  { name: "Viral Post", emoji: "⚡", desc: "Level Legend unlocked", unlocked: (profile.achievements || []).includes("Viral Post") },
+                  { name: "First Post", emoji: "📝", desc: "First published post on the platform", unlocked: (profile.achievements || []).includes("First Post") },
+                  { name: "First Friend", emoji: "🤝", desc: "Connected with your first peer", unlocked: (profile.achievements || []).includes("First Friend") },
+                  { name: "Top Creator", emoji: "👑", desc: "Reaches Level Creator at 600 XP", unlocked: (profile.achievements || []).includes("Top Creator") || (profile.xp || 0) >= 600 },
+                  { name: "Social Butterfly", emoji: "🦋", desc: "Reaches Level Influencer at 1500 XP", unlocked: (profile.achievements || []).includes("Social Butterfly") || (profile.xp || 0) >= 1500 },
+                  { name: "Viral Post", emoji: "⚡", desc: "Reaches Level Legend at 3500 XP", unlocked: (profile.achievements || []).includes("Viral Post") || (profile.xp || 0) >= 3500 },
+                  { 
+                    name: "Top Contributor", 
+                    emoji: "🔥", 
+                    desc: "Top contributor status based on active engagement over 1500 XP", 
+                    unlocked: (profile.xp || 0) >= 1500 || (profile.achievements || []).includes("Top Contributor") 
+                  },
+                  { 
+                    name: "Weekly Active", 
+                    emoji: "📅", 
+                    desc: "Weekly active engagement streak of 600 XP or higher", 
+                    unlocked: (profile.xp || 0) >= 600 || (profile.achievements || []).includes("Weekly Active") 
+                  },
                 ].map((ach) => (
-                  <div 
+                  <motion.div 
                     key={ach.name}
-                    className={`flex items-center space-x-1 px-2 py-1 rounded-full text-xs border transition duration-200 ${
+                    whileHover={{ scale: 1.05 }}
+                    className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs border transition duration-200 cursor-pointer relative group ${
                       ach.unlocked 
-                        ? "bg-[#1877F2]/10 border-[#1877F2]/30 text-neutral-800 dark:text-white dark:bg-emerald-500/10 dark:border-emerald-500/25"
+                        ? "bg-gradient-to-r from-teal-500/10 to-emerald-500/10 border-emerald-500/30 text-teal-800 dark:text-emerald-300 dark:border-emerald-500/25"
                         : "bg-neutral-50 dark:bg-neutral-900 border-neutral-150 dark:border-neutral-850 text-neutral-400 grayscale opacity-40 select-none"
                     }`}
-                    title={`${ach.name}: ${ach.desc}`}
                   >
-                    <span>{ach.emoji}</span>
-                    <span className="font-semibold text-[9px]">{ach.name}</span>
-                  </div>
+                    <span className="text-sm select-none">{ach.emoji}</span>
+                    <span className="font-sans font-bold text-[9px] uppercase tracking-wider">{ach.name}</span>
+                    
+                    {/* Tooltip detail hover overlay */}
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-2.5 bg-neutral-950 text-white rounded-xl text-[10px] leading-relaxed opacity-0 group-hover:opacity-100 transition pointer-events-none z-50 shadow-2xl border border-neutral-800 text-center">
+                      <p className="font-extrabold text-xs text-amber-400 leading-none mb-1">{ach.name}</p>
+                      <p className="font-sans text-neutral-300 leading-normal">{ach.desc}</p>
+                      <p className={`mt-1.5 font-bold ${ach.unlocked ? 'text-emerald-400' : 'text-neutral-400'}`}>
+                        {ach.unlocked ? "✓ Milestone Achieved" : "🔒 Milestone Locked"}
+                      </p>
+                    </div>
+                  </motion.div>
                 ))}
               </div>
             </div>
@@ -1073,7 +1181,10 @@ export const Profile: React.FC = () => {
         </div>
 
         {/* Center Canvas / Timeline */}
-        <div className="md:col-span-2 space-y-4">
+        <div className="md:col-span-2 space-y-5">
+          {/* 30-Day D3 Engagement Dashboard */}
+          <EngagementDashboard posts={posts} profileName={profile.fullName} />
+
           <div className="bg-white dark:bg-[#242526] p-4 rounded-xl border border-neutral-150 dark:border-neutral-800 text-xs font-bold text-neutral-400 dark:text-[#B0B3B8] uppercase tracking-wider select-none mb-4">
             Posts Timeline
           </div>
@@ -1092,6 +1203,119 @@ export const Profile: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Profiling Camera Modal Overlay */}
+      <AnimatePresence>
+        {showPhotoModal && (
+          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-[#242526] w-full max-w-md rounded-2xl p-6 border border-neutral-200 dark:border-neutral-800 shadow-2xl relative">
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setShowPhotoModal(false);
+                }}
+                className="absolute top-4 right-4 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-100 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <h3 className="text-lg font-bold text-neutral-900 dark:text-[#E4E6EB] mb-4">
+                Update Profile Picture
+              </h3>
+
+              <div className="space-y-4">
+                {/* Visual Camera Canvas or Preview */}
+                <div className="bg-neutral-100 dark:bg-black w-full aspect-square max-w-[280px] mx-auto rounded-xl overflow-hidden border border-neutral-300 dark:border-neutral-800 relative flex items-center justify-center">
+                  {cameraActive ? (
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      className="w-full h-full object-cover scale-x-[-1]"
+                    />
+                  ) : capturedImage ? (
+                    <img
+                      src={capturedImage}
+                      alt="Captured face draft"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="text-center p-4 text-neutral-500 text-xs">
+                      <p className="text-2xl mb-2">📸</p>
+                      <p>Webcam stream inactive</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Camera Actions */}
+                <div className="flex justify-center gap-2">
+                  {!cameraActive && !capturedImage ? (
+                    <button
+                      type="button"
+                      onClick={startCamera}
+                      className="bg-[#1877F2] hover:bg-[#1565C0] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md"
+                    >
+                      Use Live Device Camera
+                    </button>
+                  ) : cameraActive ? (
+                    <button
+                      type="button"
+                      onClick={capturePhoto}
+                      className="bg-red-500 hover:bg-red-650 text-white px-4 py-2 rounded-xl text-xs font-bold animate-pulse shadow-md"
+                    >
+                      Capture Snapshot
+                    </button>
+                  ) : (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={startCamera}
+                        className="bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-200 px-3 py-2 rounded-xl text-xs font-bold"
+                      >
+                        Retake
+                      </button>
+                      <button
+                        type="button"
+                        onClick={saveLivePhoto}
+                        className="bg-[#39ff14] hover:bg-[#20c00a] text-black dark:bg-[#39ff14] dark:hover:bg-[#32dd10] px-4 py-2 rounded-xl text-xs font-bold shadow-md"
+                      >
+                        Save Photo
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative flex py-2 items-center">
+                  <div className="flex-grow border-t border-neutral-200 dark:border-neutral-800"></div>
+                  <span className="flex-shrink mx-4 text-[10px] text-neutral-400 font-extrabold uppercase">or upload file</span>
+                  <div className="flex-grow border-t border-neutral-200 dark:border-neutral-800"></div>
+                </div>
+
+                {/* Option 2: Upload */}
+                <div className="text-center">
+                  <label className="inline-block bg-white dark:bg-[#3A3B3C] hover:bg-neutral-50 dark:hover:bg-[#4E4F50] border border-neutral-300 dark:border-neutral-700 text-neutral-800 dark:text-white px-4 py-2.5 rounded-xl text-xs font-bold cursor-pointer transition select-none">
+                    Select File from Device
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file && currentUser) {
+                          handlePhotoUpload(e, "profile").then(() => {
+                            setShowPhotoModal(false);
+                          });
+                        }
+                      }}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

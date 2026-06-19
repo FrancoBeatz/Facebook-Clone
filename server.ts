@@ -193,6 +193,86 @@ ${JSON.stringify(posts.map(p => ({ id: p.postId, content: p.content, author: p.a
   }
 });
 
+// Search Grounding API for trending feed news
+app.get("/api/gemini/news-grounding", async (req, res) => {
+  try {
+    const prompt = `Provide 3 short, trending tech/business/world news and interesting community discussion topics for today (${new Date().toLocaleDateString()}).
+For each item, specify:
+1. title (Short descriptive title, max 10 words)
+2. description (Brief summary with source reference details, max 30 words)
+3. category (e.g. Technology, Science, Enterprise, Creator Economy, AI)
+4. query (The Google search phrase used to get details)
+
+You MUST respond strictly with a valid JSON array of objects.
+Do not write any introductory or concluding text outside the array.
+Example format:
+[
+  {
+    "title": "...",
+    "description": "...",
+    "category": "...",
+    "query": "..."
+  }
+]`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+      }
+    });
+
+    const text = response.text || "[]";
+    let cleanText = text.trim();
+    if (cleanText.includes("```")) {
+      const match = cleanText.match(/```(?:json)?([\s\S]*?)```/);
+      if (match) {
+        cleanText = match[1].trim();
+      }
+    }
+    const startIdx = cleanText.indexOf("[");
+    const endIdx = cleanText.lastIndexOf("]");
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+      cleanText = cleanText.substring(startIdx, endIdx + 1);
+    }
+
+    const parsedNews = JSON.parse(cleanText);
+    res.json({ news: parsedNews });
+  } catch (error: any) {
+    console.error("Search Grounding News Error:", error);
+    res.status(500).json({ error: error.message || "Failed to load grounded news updates" });
+  }
+});
+
+// Microphone speech transcription API
+app.post("/api/gemini/transcribe", async (req, res) => {
+  try {
+    const { base64Audio, mimeType } = req.body;
+    if (!base64Audio) {
+      return res.status(400).json({ error: "Audio data is required" });
+    }
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        {
+          inlineData: {
+            data: base64Audio,
+            mimeType: mimeType || "audio/webm",
+          }
+        },
+        "Transcribe this audio clip accurately into text. Provide ONLY the raw transcribed text with no extra commentary, prefaces, or wrappers."
+      ]
+    });
+
+    res.json({ text: response.text || "" });
+  } catch (error: any) {
+    console.error("Transcription Error:", error);
+    res.status(500).json({ error: error.message || "Failed to transcribe speech audio" });
+  }
+});
+
 // Setup Vite Dev server or Serve build assets
 async function setupServer() {
   if (process.env.NODE_ENV !== "production") {

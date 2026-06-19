@@ -1,6 +1,9 @@
 {
   "name": "SocialSphere Pro",
   "description": "A fully functional live feed social network featuring advanced real-time connections, dynamic theme engines, AI feed ranking, and automated gamification rewards.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Image, X, Smile, Film, Sparkles, Wand2, RefreshCw, CheckCheck, Languages, BookOpen, Quote } from "lucide-react";
+import { Image, X, Smile, Film, Sparkles, Wand2, RefreshCw, CheckCheck, Languages, BookOpen, Quote, Mic, Square, Loader2 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { PostService } from "../services/post";
 
@@ -51,6 +51,72 @@ export const CreatePostBox: React.FC = () => {
   const [aiError, setAiError] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Audio Access & recording states
+  const [recording, setRecording] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      const chunks: Blob[] = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunks, { type: "audio/webm" });
+        stream.getTracks().forEach((track) => track.stop());
+
+        setTranscribing(true);
+        try {
+          const reader = new FileReader();
+          reader.readAsDataURL(audioBlob);
+          reader.onloadend = async () => {
+            const dataUrl = reader.result as string;
+            const base64Audio = dataUrl.split(",")[1];
+
+            const response = await fetch("/api/gemini/transcribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ base64Audio, mimeType: "audio/webm" }),
+            });
+
+            const data = await response.json();
+            if (data.text) {
+              const prevText = content ? content + " " : "";
+              handleContentChange(prevText + data.text);
+            } else if (data.error) {
+              console.warn("Transcribing failure:", data.error);
+            }
+          };
+        } catch (err) {
+          console.error("Transcribing reader error:", err);
+        } finally {
+          setTranscribing(false);
+        }
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setRecording(true);
+    } catch (err) {
+      console.warn("Input stream failed:", err);
+      alert("Microphone access is required for speech-to-text. Please check configuration/permissions.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && recording) {
+      mediaRecorder.stop();
+      setRecording(false);
+    }
+  };
 
   // Restore draft content on mount or profile load
   useEffect(() => {
@@ -615,6 +681,31 @@ export const CreatePostBox: React.FC = () => {
             <Film className="w-5 h-5 shrink-0" />
             <span className="hidden sm:inline text-xs font-semibold text-neutral-600 dark:text-[#B0B3B8]">
               Video
+            </span>
+          </button>
+
+          {/* Micro Voice-to-Text Button */}
+          <button
+            type="button"
+            onClick={recording ? stopRecording : startRecording}
+            className={`flex items-center space-x-2 px-3 py-2 rounded-xl transition cursor-pointer duration-200 ${
+              recording
+                ? "bg-red-500/20 text-red-500 border border-red-500/30 animate-pulse"
+                : transcribing
+                ? "bg-amber-500/10 text-amber-500 border border-amber-500/20"
+                : "hover:bg-neutral-100 dark:hover:bg-[#3A3B3C] text-blue-500"
+            }`}
+            title={recording ? "Stop recording and transcribe" : "Record voice post via AI transcription"}
+          >
+            {transcribing ? (
+              <Loader2 className="w-5 h-5 shrink-0 animate-spin" />
+            ) : recording ? (
+              <Square className="w-5 h-5 shrink-0 text-red-500" />
+            ) : (
+              <Mic className="w-5 h-5 shrink-0 text-blue-500" />
+            )}
+            <span className="hidden sm:inline text-xs font-semibold text-neutral-600 dark:text-[#B0B3B8]">
+              {transcribing ? "Transcribing..." : recording ? "Stop Rec" : "Voice Text"}
             </span>
           </button>
 

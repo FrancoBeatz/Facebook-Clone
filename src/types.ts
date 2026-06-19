@@ -37,6 +37,7 @@ export interface Post {
   content: string;
   images?: string[];
   likes: string[]; // List of userUids
+  reactions?: Record<string, string[]>; // e.g. "love" -> [uid1, uid2]
   commentsCount: number;
   createdAt: string;
 
