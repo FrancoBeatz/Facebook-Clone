@@ -125,8 +125,31 @@ export const Login: React.FC = () => {
 
           {/* Feedback messages */}
           {errorMsg && (
-            <div className="mb-4 p-3 bg-red-100 dark:bg-red-950/40 border border-red-300 dark:border-red-900 rounded-lg text-sm text-red-700 dark:text-red-400 font-medium">
-              {errorMsg}
+            <div className="mb-4">
+              {errorMsg.toLowerCase().includes("unauthorized-domain") || errorMsg.toLowerCase().includes("auth/unauthorized-domain") ? (
+                <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-300 dark:border-amber-900 rounded-xl space-y-3 text-xs leading-relaxed">
+                  <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-bold">
+                    <span>⚠️</span>
+                    <span className="text-sm">Unauthorized Firebase Domain</span>
+                  </div>
+                  <p className="text-neutral-750 dark:text-neutral-300">
+                    To make Google Sign-In or other authentication providers work in this environment, you must authorize your current hostname in your Firebase project:
+                  </p>
+                  <div className="bg-neutral-100 dark:bg-neutral-800 p-2.5 rounded-lg font-mono text-[11px] text-blue-600 dark:text-blue-400 break-all select-all font-bold" title="Double click to copy">
+                    {window.location.hostname}
+                  </div>
+                  <div className="space-y-1.5 text-neutral-600 dark:text-neutral-400 pl-4 list-decimal list-inside">
+                    <div>1. Open the <a href={`https://console.firebase.google.com/project/${window.location.hostname.includes("localhost") ? "your-project" : "plasma-snow-6hnbb"}/authentication/settings`} target="_blank" rel="noreferrer" className="text-blue-500 font-bold hover:underline">Firebase Auth Settings</a>.</div>
+                    <div>2. Under the <strong>Authorized domains</strong> section, click <strong>Add domain</strong>.</div>
+                    <div>3. Paste the hostname highlighted above and select <strong>Add</strong>.</div>
+                    <div>4. Refresh this tab and try signing in again!</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 bg-red-100 dark:bg-red-950/40 border border-red-300 dark:border-red-900 rounded-lg text-sm text-red-700 dark:text-red-400 font-medium">
+                  {errorMsg}
+                </div>
+              )}
             </div>
           )}
           {successMsg && (
