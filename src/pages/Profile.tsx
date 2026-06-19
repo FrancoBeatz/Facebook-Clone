@@ -143,6 +143,7 @@ export const Profile: React.FC = () => {
     if (!targetUid) return;
     
     setLoading(true);
+    let active = true;
     let unsubPosts = () => {};
     let unsubRels = () => {};
     let unsubHighlights = () => {};
@@ -150,6 +151,7 @@ export const Profile: React.FC = () => {
     const loadData = async () => {
       try {
         const u = await UserService.getUserProfile(targetUid);
+        if (!active) return;
         setProfile(u);
 
         if (u) {
@@ -162,23 +164,28 @@ export const Profile: React.FC = () => {
         }
 
         const users = await UserService.getAllUsers();
+        if (!active) return;
         setAllUsers(users);
 
         unsubPosts = PostService.listenToUserPosts(targetUid, (userPosts) => {
+          if (!active) return;
           setPosts(userPosts);
         });
 
         if (currentUser) {
           unsubRels = FriendService.listenToRelationships(currentUser.uid, (rels) => {
+            if (!active) return;
             setRelationships(rels);
           });
         }
 
         unsubHighlights = HighlightService.listenToUserHighlights(targetUid, (hlList) => {
+          if (!active) return;
           setHighlights(hlList);
           setLoading(false);
         });
       } catch (err) {
+        if (!active) return;
         console.error("Error drawing profile components:", err);
         setLoading(false);
       }
@@ -186,6 +193,7 @@ export const Profile: React.FC = () => {
 
     loadData();
     return () => {
+      active = false;
       unsubPosts();
       unsubRels();
       unsubHighlights();

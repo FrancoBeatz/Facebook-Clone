@@ -1,27 +1,47 @@
-import {
-  collection,
-  doc,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  orderBy,
-  where,
-  getDoc,
-  writeBatch,
-  increment,
-  arrayUnion,
-  arrayRemove,
-  getDocs,
-  limit,
-} from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { db, storage, handleFirestoreError, OperationType } from "../firebase/config";
+import { supabase, isSupabaseConfigured, localDb, pubsub } from "../supabase/client";
 import { Post, Comment } from "../types";
 import { UserService } from "./user";
 
 export const PostService = {
+  async getAllPosts(): Promise<Post[]> {
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("posts")
+          .select("*")
+          .order("createdAt", { ascending: false });
+        if (error) throw error;
+        return (data || []) as Post[];
+      } else {
+        const list = localDb.get<Post[]>("posts", []);
+        return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    } catch (err) {
+      console.error("Error getting public posts:", err);
+      return [];
+    }
+  },
+
+  async getPost(postId: string): Promise<Post | null> {
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("posts")
+          .select("*")
+          .eq("postId", postId)
+          .single();
+        if (error) return null;
+        return data as Post;
+      } else {
+        const posts = localDb.get<Post[]>("posts", []);
+        return posts.find((p) => p.postId === postId) || null;
+      }
+    } catch (err) {
+      console.error("Error in getPost:", err);
+      return null;
+    }
+  },
+
   async createPost(
     authorId: string,
     authorName: string,
@@ -37,116 +57,173 @@ export const PostService = {
       authorIsPage?: boolean;
     }
   ): Promise<void> {
-    const postRef = doc(collection(db, "posts"));
-    const path = `posts/${postRef.id}`;
     try {
+      const postId = "post_" + Math.random().toString(36).substring(3) + "_" + Date.now();
       const imageUrls: string[] = [];
+
+      // Handle photos conversion
       for (const file of imageFiles) {
-        const fileExt = file.name.split(".").pop();
-        const randId = Math.random().toString(36).substring(3);
-        const storagePath = `posts/${postRef.id}/${randId}_${Date.now()}.${fileExt}`;
-        const imageRef = ref(storage, storagePath);
-        await uploadBytes(imageRef, file);
-        const url = await getDownloadURL(imageRef);
-        imageUrls.push(url);
+        try {
+          if (isSupabaseConfigured && supabase) {
+            const randId = Math.random().toString(36).substring(3);
+            const path = `${postId}/${randId}_${file.name}`;
+            const { error: uploadError } = await supabase.storage.from("posts").upload(path, file);
+            if (!uploadError) {
+              const { data } = supabase.storage.from("posts").getPublicUrl(path);
+              imageUrls.push(data.publicUrl);
+              continue;
+            }
+          }
+          // Fallback to base64 encoding
+          const b64 = await UserService.convertFileToBase64(file);
+          imageUrls.push(b64);
+        } catch (err) {
+          console.warn("Could not encode image file:", err);
+        }
       }
 
       const newPost: Post = {
-        postId: postRef.id,
+        postId,
         authorId,
         authorName,
         authorAvatar,
         content,
         images: imageUrls,
         likes: [],
+        reactions: {},
         commentsCount: 0,
         createdAt: new Date().toISOString(),
         ...(extraParams || {}),
       };
 
-      const batch = writeBatch(db);
-      batch.set(postRef, newPost);
-      await batch.commit();
+      if (isSupabaseConfigured && supabase) {
+        const { error } = await supabase.from("posts").insert(newPost);
+        if (error) throw error;
+      } else {
+        const posts = localDb.get<Post[]>("posts", []);
+        posts.unshift(newPost);
+        localDb.set("posts", posts);
+      }
 
-      // Award XP & trigger gamification
+      // Award XP for activity
       try {
-        const postsQ = query(collection(db, "posts"), where("authorId", "==", authorId), limit(2));
-        const postsSnap = await getDocs(postsQ);
-        const actionType = postsSnap.size <= 1 ? "first_post" : "post_created";
+        let actionType = "post_created";
+        if (isSupabaseConfigured && supabase) {
+          const { count } = await supabase
+            .from("posts")
+            .select("*", { count: "exact", head: true })
+            .eq("authorId", authorId);
+          if (count && count <= 1) actionType = "first_post";
+        } else {
+          const posts = localDb.get<Post[]>("posts", []);
+          const authorPosts = posts.filter((p) => p.authorId === authorId);
+          if (authorPosts.length <= 1) actionType = "first_post";
+        }
         await UserService.awardXP(authorId, 30, actionType);
       } catch (xpErr) {
         console.warn("Failed to award XP:", xpErr);
       }
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      console.error("Error creating post:", err);
     }
   },
 
   listenToFeed(callback: (posts: Post[]) => void, onError?: (err: Error) => void) {
-    const path = "posts";
-    const q = query(collection(db, "posts"), orderBy("createdAt", "desc"));
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const posts: Post[] = [];
-        snapshot.forEach((docSnap) => {
-          posts.push(docSnap.data() as Post);
-        });
-        callback(posts);
-      },
-      (err) => {
-        if (onError) onError(err);
-        handleFirestoreError(err, OperationType.LIST, path);
-      }
-    );
+    if (isSupabaseConfigured && supabase) {
+      this.getAllPosts().then(callback).catch(onError);
+
+      const channel = supabase
+        .channel("public-feed-updates")
+        .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, async () => {
+          const list = await this.getAllPosts();
+          callback(list);
+        })
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      const fetchSorted = () => {
+        const posts = localDb.get<Post[]>("posts", []);
+        return [...posts].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      };
+      callback(fetchSorted());
+      return pubsub.subscribe("posts", () => {
+        callback(fetchSorted());
+      });
+    }
   },
 
   listenToUserPosts(userId: string, callback: (posts: Post[]) => void, onError?: (err: Error) => void) {
-    const path = "posts";
-    const q = query(
-      collection(db, "posts"),
-      where("authorId", "==", userId)
-    );
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const posts: Post[] = [];
-        snapshot.forEach((docSnap) => {
-          posts.push(docSnap.data() as Post);
-        });
-        // Client-side sorting for chronological order
-        posts.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        callback(posts);
-      },
-      (err) => {
-        if (onError) onError(err);
-        handleFirestoreError(err, OperationType.LIST, path);
+    const fetchUserPosts = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("posts")
+          .select("*")
+          .eq("authorId", userId)
+          .order("createdAt", { ascending: false });
+        if (error) throw error;
+        return (data || []) as Post[];
+      } else {
+        const posts = localDb.get<Post[]>("posts", []);
+        return posts
+          .filter((p) => p.authorId === userId)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       }
-    );
+    };
+
+    fetchUserPosts().then(callback).catch(onError);
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel(`user-posts-${userId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, async () => {
+          const list = await fetchUserPosts();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe("posts", async () => {
+        const list = await fetchUserPosts();
+        callback(list);
+      });
+    }
   },
 
   async likePost(postId: string, userId: string): Promise<void> {
-    const path = `posts/${postId}`;
     try {
-      const docRef = doc(db, "posts", postId);
-      await updateDoc(docRef, {
-        likes: arrayUnion(userId),
-      });
+      const current = await this.getPost(postId);
+      if (!current) return;
+
+      const currentLikes = current.likes || [];
+      if (currentLikes.includes(userId)) return;
+
+      const nextLikes = [...currentLikes, userId];
+
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("posts").update({ likes: nextLikes }).eq("postId", postId);
+      } else {
+        const posts = localDb.get<Post[]>("posts", []);
+        const updated = posts.map((p) => (p.postId === postId ? { ...p, likes: nextLikes } : p));
+        localDb.set("posts", updated);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error in liking post:", err);
     }
   },
 
   async reactToPost(postId: string, userId: string, reactionType: string): Promise<void> {
-    const path = `posts/${postId}`;
     try {
-      const docRef = doc(db, "posts", postId);
-      const postSnap = await getDoc(docRef);
-      if (!postSnap.exists()) return;
-      const data = postSnap.data();
-      const oldReactions = data.reactions || {};
-      const oldLikes = data.likes || [];
-      
+      const current = await this.getPost(postId);
+      if (!current) return;
+
+      const oldReactions = current.reactions || {};
+      const oldLikes = current.likes || [];
+
       const updatedReactions: Record<string, string[]> = {};
       const keys = ["like", "love", "haha", "wow", "care"];
       keys.forEach((k) => {
@@ -154,53 +231,69 @@ export const PostService = {
         updatedReactions[k] = arr.filter((u: string) => u !== userId);
       });
 
+      let nextLikes = [...oldLikes];
+
       if (reactionType) {
         if (!updatedReactions[reactionType]) {
           updatedReactions[reactionType] = [];
         }
         updatedReactions[reactionType].push(userId);
-        
-        // Sync to standard likes array for backwards compatibility
-        let nextLikes = [...oldLikes];
+
         if (!nextLikes.includes(userId)) {
           nextLikes.push(userId);
         }
-        await updateDoc(docRef, {
-          reactions: updatedReactions,
-          likes: nextLikes
-        });
       } else {
-        // Remove reaction
-        let nextLikes = oldLikes.filter((u: string) => u !== userId);
-        await updateDoc(docRef, {
-          reactions: updatedReactions,
-          likes: nextLikes
-        });
+        nextLikes = nextLikes.filter((u: string) => u !== userId);
+      }
+
+      if (isSupabaseConfigured && supabase) {
+        await supabase
+          .from("posts")
+          .update({ reactions: updatedReactions, likes: nextLikes })
+          .eq("postId", postId);
+      } else {
+        const posts = localDb.get<Post[]>("posts", []);
+        const updated = posts.map((p) =>
+          p.postId === postId ? { ...p, reactions: updatedReactions, likes: nextLikes } : p
+        );
+        localDb.set("posts", updated);
       }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error processing reaction:", err);
     }
   },
 
   async unlikePost(postId: string, userId: string): Promise<void> {
-    const path = `posts/${postId}`;
     try {
-      const docRef = doc(db, "posts", postId);
-      await updateDoc(docRef, {
-        likes: arrayRemove(userId),
-      });
+      const current = await this.getPost(postId);
+      if (!current) return;
+
+      const currentLikes = current.likes || [];
+      const nextLikes = currentLikes.filter((id) => id !== userId);
+
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("posts").update({ likes: nextLikes }).eq("postId", postId);
+      } else {
+        const posts = localDb.get<Post[]>("posts", []);
+        const updated = posts.map((p) => (p.postId === postId ? { ...p, likes: nextLikes } : p));
+        localDb.set("posts", updated);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error in unlikePost:", err);
     }
   },
 
   async deletePost(postId: string): Promise<void> {
-    const path = `posts/${postId}`;
     try {
-      const docRef = doc(db, "posts", postId);
-      await deleteDoc(docRef);
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("posts").delete().eq("postId", postId);
+      } else {
+        const posts = localDb.get<Post[]>("posts", []);
+        const nextPosts = posts.filter((p) => p.postId !== postId);
+        localDb.set("posts", nextPosts);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, path);
+      console.error("Failed to delete post:", err);
     }
   },
 
@@ -211,13 +304,10 @@ export const PostService = {
     profileImage: string,
     text: string
   ): Promise<void> {
-    const commentsColPath = `posts/${postId}/comments`;
-    const commentDocRef = doc(collection(db, "posts", postId, "comments"));
-    const path = `${commentsColPath}/${commentDocRef.id}`;
-    
     try {
+      const commentId = "comment_" + Math.random().toString(36).substring(3) + "_" + Date.now();
       const newComment: Comment = {
-        commentId: commentDocRef.id,
+        commentId,
         userId,
         username,
         profileImage,
@@ -225,48 +315,91 @@ export const PostService = {
         createdAt: new Date().toISOString(),
       };
 
-      const batch = writeBatch(db);
-      batch.set(commentDocRef, newComment);
-      batch.update(doc(db, "posts", postId), {
-        commentsCount: increment(1),
-      });
+      if (isSupabaseConfigured && supabase) {
+        // Increment post comments count
+        const postObj = await this.getPost(postId);
+        const nextCount = (postObj?.commentsCount || 0) + 1;
 
-      await batch.commit();
+        // Insert comment and update commentsCount
+        await supabase.from("comments").insert({ ...newComment, postId });
+        await supabase.from("posts").update({ commentsCount: nextCount }).eq("postId", postId);
+      } else {
+        const commentsKey = `comments_${postId}`;
+        const comments = localDb.get<Comment[]>(commentsKey, []);
+        comments.push(newComment);
+        localDb.set(commentsKey, comments);
+
+        // Update posts counts
+        const posts = localDb.get<Post[]>("posts", []);
+        const updatedPosts = posts.map((p) =>
+          p.postId === postId ? { ...p, commentsCount: (p.commentsCount || 0) + 1 } : p
+        );
+        localDb.set("posts", updatedPosts);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      console.error("Error adding comment:", err);
     }
   },
 
   listenToComments(postId: string, callback: (comments: Comment[]) => void, onError?: (err: Error) => void) {
-    const path = `posts/${postId}/comments`;
-    const q = query(collection(db, "posts", postId, "comments"), orderBy("createdAt", "asc"));
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const comments: Comment[] = [];
-        snapshot.forEach((docSnap) => {
-          comments.push(docSnap.data() as Comment);
-        });
-        callback(comments);
-      },
-      (err) => {
-        if (onError) onError(err);
-        handleFirestoreError(err, OperationType.LIST, path);
+    const fetchComments = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("comments")
+          .select("*")
+          .eq("postId", postId)
+          .order("createdAt", { ascending: true });
+        if (error) throw error;
+        return (data || []) as Comment[];
+      } else {
+        const commentsKey = `comments_${postId}`;
+        return localDb.get<Comment[]>(commentsKey, []);
       }
-    );
+    };
+
+    fetchComments().then(callback).catch(onError);
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel(`comments-${postId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, async () => {
+          const list = await fetchComments();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe(`comments_${postId}`, async () => {
+        const list = await fetchComments();
+        callback(list);
+      });
+    }
   },
 
   async deleteComment(postId: string, commentId: string): Promise<void> {
-    const path = `posts/${postId}/comments/${commentId}`;
     try {
-      const batch = writeBatch(db);
-      batch.delete(doc(db, "posts", postId, "comments", commentId));
-      batch.update(doc(db, "posts", postId), {
-        commentsCount: increment(-1),
-      });
-      await batch.commit();
+      if (isSupabaseConfigured && supabase) {
+        const postObj = await this.getPost(postId);
+        const nextCount = Math.max(0, (postObj?.commentsCount || 1) - 1);
+
+        await supabase.from("comments").delete().eq("commentId", commentId);
+        await supabase.from("posts").update({ commentsCount: nextCount }).eq("postId", postId);
+      } else {
+        const commentsKey = `comments_${postId}`;
+        const comments = localDb.get<Comment[]>(commentsKey, []);
+        const filtered = comments.filter((c) => c.commentId !== commentId);
+        localDb.set(commentsKey, filtered);
+
+        const posts = localDb.get<Post[]>("posts", []);
+        const updatedPosts = posts.map((p) =>
+          p.postId === postId ? { ...p, commentsCount: Math.max(0, (p.commentsCount || 1) - 1) } : p
+        );
+        localDb.set("posts", updatedPosts);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, path);
+      console.error("Error deleting comment:", err);
     }
-  }
+  },
 };

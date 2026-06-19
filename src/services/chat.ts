@@ -1,20 +1,6 @@
-import {
-  doc,
-  setDoc,
-  updateDoc,
-  collection,
-  query,
-  orderBy,
-  onSnapshot,
-  getDoc,
-  addDoc,
-  where,
-  writeBatch,
-  getDocs,
-} from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { db, storage, handleFirestoreError, OperationType } from "../firebase/config";
+import { supabase, isSupabaseConfigured, localDb, pubsub } from "../supabase/client";
 import { ChatRoom, Message } from "../types";
+import { UserService } from "./user";
 
 export const ChatService = {
   getRoomId(user1: string, user2: string): string {
@@ -23,68 +9,130 @@ export const ChatService = {
 
   async getOrCreateChatRoom(user1Id: string, user2Id: string): Promise<string> {
     const roomId = this.getRoomId(user1Id, user2Id);
-    const path = `chats/${roomId}`;
     try {
-      const docRef = doc(db, "chats", roomId);
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) {
-        const newRoom: ChatRoom = {
-          roomId,
-          participants: [user1Id, user2Id],
-          lastMessage: "",
-          lastMessageAt: new Date().toISOString(),
-          typing: {
-            [user1Id]: false,
-            [user2Id]: false,
-          },
-        };
-        await setDoc(docRef, newRoom);
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("chats")
+          .select("*")
+          .eq("roomId", roomId)
+          .maybeSingle();
+
+        if (error && error.code !== "PGRST116") throw error;
+
+        if (!data) {
+          const newRoom: ChatRoom = {
+            roomId,
+            participants: [user1Id, user2Id],
+            lastMessage: "",
+            lastMessageAt: new Date().toISOString(),
+            typing: {
+              [user1Id]: false,
+              [user2Id]: false,
+            },
+          };
+          await supabase.from("chats").insert(newRoom);
+        }
+      } else {
+        const list = localDb.get<ChatRoom[]>("chats", []);
+        const matched = list.find((r) => r.roomId === roomId);
+        if (!matched) {
+          const newRoom: ChatRoom = {
+            roomId,
+            participants: [user1Id, user2Id],
+            lastMessage: "",
+            lastMessageAt: new Date().toISOString(),
+            typing: {
+              [user1Id]: false,
+              [user2Id]: false,
+            },
+          };
+          list.push(newRoom);
+          localDb.set("chats", list);
+        }
       }
       return roomId;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, path);
+      console.error("Error getOrCreateChatRoom:", err);
+      return roomId;
     }
   },
 
   listenToChatRooms(userId: string, callback: (rooms: ChatRoom[]) => void) {
-    const path = "chats";
-    const q = query(
-      collection(db, "chats"),
-      where("participants", "array-contains", userId)
-    );
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const rooms: ChatRoom[] = [];
-        snapshot.forEach((docSnap) => {
-          rooms.push(docSnap.data() as ChatRoom);
-        });
-        // Sort rooms by last message time
-        rooms.sort((a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime());
-        callback(rooms);
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, path);
+    const fetchRooms = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("chats")
+          .select("*")
+          .contains("participants", [userId]);
+        if (error) throw error;
+        return ((data || []) as ChatRoom[]).sort(
+          (a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime()
+        );
+      } else {
+        const rooms = localDb.get<ChatRoom[]>("chats", []);
+        const list = rooms.filter((r) => r.participants?.includes(userId));
+        return [...list].sort(
+          (a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime()
+        );
       }
-    );
+    };
+
+    fetchRooms().then(callback).catch((err) => console.warn(err));
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel(`chats-list-${userId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "chats" }, async () => {
+          const list = await fetchRooms();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe("chats", async () => {
+        const list = await fetchRooms();
+        callback(list);
+      });
+    }
   },
 
   listenToMessages(roomId: string, callback: (messages: Message[]) => void) {
-    const path = `chats/${roomId}/messages`;
-    const q = query(collection(db, "chats", roomId, "messages"), orderBy("createdAt", "asc"));
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const messages: Message[] = [];
-        snapshot.forEach((docSnap) => {
-          messages.push(docSnap.data() as Message);
-        });
-        callback(messages);
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, path);
+    const fetchMsgs = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("roomId", roomId)
+          .order("createdAt", { ascending: true });
+        if (error) throw error;
+        return (data || []) as Message[];
+      } else {
+        const key = `messages_${roomId}`;
+        return localDb.get<Message[]>(key, []);
       }
-    );
+    };
+
+    fetchMsgs().then(callback).catch((err) => console.warn(err));
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel(`messages-${roomId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, async () => {
+          const list = await fetchMsgs();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe(`messages_${roomId}`, async () => {
+        const list = await fetchMsgs();
+        callback(list);
+      });
+    }
   },
 
   async sendMessage(
@@ -93,22 +141,32 @@ export const ChatService = {
     text: string,
     imageFile?: File
   ): Promise<void> {
-    const messageDocRef = doc(collection(db, "chats", roomId, "messages"));
-    const path = `chats/${roomId}/messages/${messageDocRef.id}`;
     try {
       let imageUrl = "";
+      const messageId = "msg_" + Math.random().toString(36).substring(3) + "_" + Date.now();
+
       if (imageFile) {
-        const fileExt = imageFile.name.split(".").pop();
-        const randId = Math.random().toString(36).substring(3);
-        const storagePath = `chats/${roomId}/${randId}_${Date.now()}.${fileExt}`;
-        const imageRef = ref(storage, storagePath);
-        await uploadBytes(imageRef, imageFile);
-        imageUrl = await getDownloadURL(imageRef);
+        try {
+          if (isSupabaseConfigured && supabase) {
+            const randId = Math.random().toString(36).substring(3);
+            const path = `chats/${roomId}/${randId}_${imageFile.name}`;
+            const { error: uploadErr } = await supabase.storage.from("chats").upload(path, imageFile);
+            if (!uploadErr) {
+              const { data } = supabase.storage.from("chats").getPublicUrl(path);
+              imageUrl = data.publicUrl;
+            }
+          }
+          if (!imageUrl) {
+            imageUrl = await UserService.convertFileToBase64(imageFile);
+          }
+        } catch (err) {
+          console.warn("Could not encode chat image file:", err);
+        }
       }
 
       const timestamp = new Date().toISOString();
       const newMessage: Message = {
-        messageId: messageDocRef.id,
+        messageId,
         senderId,
         text: imageUrl ? "[Photo]" : text,
         image: imageUrl || undefined,
@@ -117,59 +175,118 @@ export const ChatService = {
         createdAt: timestamp,
       };
 
-      const batch = writeBatch(db);
-      // Write message
-      batch.set(messageDocRef, newMessage);
-      // Update room lastMessage metadata
-      batch.update(doc(db, "chats", roomId), {
-        lastMessage: text || "[Photo]",
-        lastMessageAt: timestamp,
-        [`typing.${senderId}`]: false, // reset typing
-      });
+      if (isSupabaseConfigured && supabase) {
+        // Find existing room to obtain typing details
+        const { data: chatData } = await supabase
+          .from("chats")
+          .select("typing")
+          .eq("roomId", roomId)
+          .single();
+        const oldTyping = chatData?.typing || {};
+        const updatedTyping = { ...oldTyping, [senderId]: false };
 
-      await batch.commit();
+        await supabase.from("messages").insert({ ...newMessage, roomId });
+        await supabase
+          .from("chats")
+          .update({
+            lastMessage: text || "[Photo]",
+            lastMessageAt: timestamp,
+            typing: updatedTyping,
+          })
+          .eq("roomId", roomId);
+      } else {
+        const key = `messages_${roomId}`;
+        const messages = localDb.get<Message[]>(key, []);
+        messages.push(newMessage);
+        localDb.set(key, messages);
+
+        // Update chats meta
+        const rooms = localDb.get<ChatRoom[]>("chats", []);
+        const updatedRooms = rooms.map((r) => {
+          if (r.roomId === roomId) {
+            const oldTyping = r.typing || {};
+            return {
+              ...r,
+              lastMessage: text || "[Photo]",
+              lastMessageAt: timestamp,
+              typing: { ...oldTyping, [senderId]: false },
+            };
+          }
+          return r;
+        });
+        localDb.set("chats", updatedRooms);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      console.error("Error sending chat message:", err);
     }
   },
 
   async setTypingStatus(roomId: string, userId: string, isTyping: boolean): Promise<void> {
-    const path = `chats/${roomId}`;
     try {
-      const docRef = doc(db, "chats", roomId);
-      await updateDoc(docRef, {
-        [`typing.${userId}`]: isTyping,
-      });
+      if (isSupabaseConfigured && supabase) {
+        const { data: chatData } = await supabase
+          .from("chats")
+          .select("typing")
+          .eq("roomId", roomId)
+          .single();
+        const oldTyping = chatData?.typing || {};
+        const updatedTyping = { ...oldTyping, [userId]: isTyping };
+
+        await supabase.from("chats").update({ typing: updatedTyping }).eq("roomId", roomId);
+      } else {
+        const rooms = localDb.get<ChatRoom[]>("chats", []);
+        const updatedRooms = rooms.map((r) => {
+          if (r.roomId === roomId) {
+            const oldTyping = r.typing || {};
+            return {
+              ...r,
+              typing: { ...oldTyping, [userId]: isTyping },
+            };
+          }
+          return r;
+        });
+        localDb.set("chats", updatedRooms);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error setting typing status:", err);
     }
   },
 
   async markMessagesSeen(roomId: string, userId: string): Promise<void> {
-    const path = `chats/${roomId}/messages`;
     try {
-      // Get all unseen messages and batch-update.
-      const messagesRef = collection(db, "chats", roomId, "messages");
-      const snap = await getDocs(messagesRef);
-      const batch = writeBatch(db);
-      let updated = false;
-
-      snap.forEach((docSnap) => {
-        const message = docSnap.data() as Message;
-        if (message.senderId !== userId && (!message.seenBy || !message.seenBy.includes(userId))) {
-          const currentSeen = message.seenBy || [];
-          batch.update(docSnap.ref, {
-            seenBy: [...currentSeen, userId],
-          });
-          updated = true;
+      if (isSupabaseConfigured && supabase) {
+        const { data: messages } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("roomId", roomId);
+        
+        for (const msg of messages || []) {
+          if (msg.senderId !== userId && (!msg.seenBy || !msg.seenBy.includes(userId))) {
+            const nextSeen = [...(msg.seenBy || []), userId];
+            await supabase.from("messages").update({ seenBy: nextSeen }).eq("messageId", msg.messageId);
+          }
         }
-      });
+      } else {
+        const key = `messages_${roomId}`;
+        const messages = localDb.get<Message[]>(key, []);
+        let updated = false;
+        const nextMsgs = messages.map((m) => {
+          if (m.senderId !== userId && (!m.seenBy || !m.seenBy.includes(userId))) {
+            updated = true;
+            return {
+              ...m,
+              seenBy: [...(m.seenBy || []), userId],
+            };
+          }
+          return m;
+        });
 
-      if (updated) {
-        await batch.commit();
+        if (updated) {
+          localDb.set(key, nextMsgs);
+        }
       }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error marking messages seen:", err);
     }
-  }
+  },
 };

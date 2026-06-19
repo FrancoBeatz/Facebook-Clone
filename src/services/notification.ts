@@ -1,15 +1,4 @@
-import {
-  collection,
-  doc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  where,
-  orderBy,
-} from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "../firebase/config";
+import { supabase, isSupabaseConfigured, localDb, pubsub } from "../supabase/client";
 import { Notification } from "../types";
 
 export const NotificationService = {
@@ -21,71 +10,101 @@ export const NotificationService = {
     senderAvatar: string,
     postId?: string
   ): Promise<void> {
-    // If you send notification to yourself, ignore
     if (receiverId === senderId) return;
 
-    const notifColRef = collection(db, "notifications");
-    const docRef = doc(notifColRef);
-    const path = `notifications/${docRef.id}`;
+    const id = "notif_" + Math.random().toString(36).substring(3) + "_" + Date.now();
+    const newNotification: Notification = {
+      id,
+      type,
+      receiverId,
+      senderId,
+      senderName,
+      senderAvatar,
+      postId: postId || "",
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    };
 
     try {
-      const newNotification: Notification = {
-        id: docRef.id,
-        type,
-        receiverId,
-        senderId,
-        senderName,
-        senderAvatar,
-        postId: postId || "",
-        isRead: false,
-        createdAt: new Date().toISOString(),
-      };
-      await setDoc(docRef, newNotification);
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("notifications").insert(newNotification);
+      } else {
+        const list = localDb.get<Notification[]>("notifications", []);
+        list.push(newNotification);
+        localDb.set("notifications", list);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      console.error("Error creating notification:", err);
     }
   },
 
   listenToNotifications(userId: string, callback: (notifications: Notification[]) => void) {
-    const path = "notifications";
-    const q = query(
-      collection(db, "notifications"),
-      where("receiverId", "==", userId)
-    );
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const list: Notification[] = [];
-        snapshot.forEach((docSnap) => {
-          list.push(docSnap.data() as Notification);
-        });
-        // Sort chronologically client-side
-        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        callback(list);
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, path);
+    const fetchNotifications = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("notifications")
+          .select("*")
+          .eq("receiverId", userId)
+          .order("createdAt", { ascending: false });
+        if (error) throw error;
+        return (data || []) as Notification[];
+      } else {
+        const list = localDb.get<Notification[]>("notifications", []);
+        return list
+          .filter((n) => n.receiverId === userId)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       }
-    );
+    };
+
+    fetchNotifications().then(callback).catch((err) => console.warn(err));
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel(`notifications-${userId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, async () => {
+          const list = await fetchNotifications();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe("notifications", async () => {
+        const list = await fetchNotifications();
+        callback(list);
+      });
+    }
   },
 
   async markNotificationRead(notificationId: string): Promise<void> {
-    const path = `notifications/${notificationId}`;
     try {
-      await updateDoc(doc(db, "notifications", notificationId), {
-        isRead: true,
-      });
+      if (isSupabaseConfigured && supabase) {
+        await supabase
+          .from("notifications")
+          .update({ isRead: true })
+          .eq("id", notificationId);
+      } else {
+        const list = localDb.get<Notification[]>("notifications", []);
+        const updated = list.map((n) => (n.id === notificationId ? { ...n, isRead: true } : n));
+        localDb.set("notifications", updated);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error marking notification read:", err);
     }
   },
 
   async deleteNotification(notificationId: string): Promise<void> {
-    const path = `notifications/${notificationId}`;
     try {
-      await deleteDoc(doc(db, "notifications", notificationId));
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("notifications").delete().eq("id", notificationId);
+      } else {
+        const list = localDb.get<Notification[]>("notifications", []);
+        const filtered = list.filter((n) => n.id !== notificationId);
+        localDb.set("notifications", filtered);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, path);
+      console.error("Error deleting notification:", err);
     }
-  }
+  },
 };

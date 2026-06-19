@@ -22,25 +22,32 @@ export const SidebarRight: React.FC = () => {
   useEffect(() => {
     if (!userProfile) return;
 
+    let active = true;
     let unsubRels = () => {};
 
     const loadData = async () => {
       try {
         const users = await UserService.getAllUsers();
+        if (!active) return;
         setAllUsers(users.filter((u) => u.uid !== userProfile.uid));
 
         unsubRels = FriendService.listenToRelationships(userProfile.uid, (rels) => {
+          if (!active) return;
           setRelationships(rels);
           setLoading(false);
         });
       } catch (err) {
+        if (!active) return;
         console.error("Error loading sidebar right content:", err);
         setLoading(false);
       }
     };
 
     loadData();
-    return () => unsubRels();
+    return () => {
+      active = false;
+      unsubRels();
+    };
   }, [userProfile]);
 
   // Compute suggestions and friends lists

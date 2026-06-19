@@ -3,7 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { LogIn, UserPlus, HelpCircle } from "lucide-react";
 
 export const Login: React.FC = () => {
-  const { loginWithEmail, registerWithEmail, loginWithGoogle, resetPassword } = useAuth();
+  const { loginWithEmail, registerWithEmail, resetPassword } = useAuth();
 
   const [isRegistering, setIsRegistering] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
@@ -87,14 +87,7 @@ export const Login: React.FC = () => {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setErrorMsg("");
-    try {
-      await loginWithGoogle();
-    } catch (err: any) {
-      setErrorMsg(err?.message || "Google Sign-in abandoned or failed");
-    }
-  };
+
 
   return (
     <div className="min-h-screen bg-neutral-100 dark:bg-[#18191A] flex flex-col md:flex-row items-center justify-center p-4 md:px-12 lg:px-24">
@@ -125,31 +118,8 @@ export const Login: React.FC = () => {
 
           {/* Feedback messages */}
           {errorMsg && (
-            <div className="mb-4">
-              {errorMsg.toLowerCase().includes("unauthorized-domain") || errorMsg.toLowerCase().includes("auth/unauthorized-domain") ? (
-                <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-300 dark:border-amber-900 rounded-xl space-y-3 text-xs leading-relaxed">
-                  <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-bold">
-                    <span>⚠️</span>
-                    <span className="text-sm">Unauthorized Firebase Domain</span>
-                  </div>
-                  <p className="text-neutral-750 dark:text-neutral-300">
-                    To make Google Sign-In or other authentication providers work in this environment, you must authorize your current hostname in your Firebase project:
-                  </p>
-                  <div className="bg-neutral-100 dark:bg-neutral-800 p-2.5 rounded-lg font-mono text-[11px] text-blue-600 dark:text-blue-400 break-all select-all font-bold" title="Double click to copy">
-                    {window.location.hostname}
-                  </div>
-                  <div className="space-y-1.5 text-neutral-600 dark:text-neutral-400 pl-4 list-decimal list-inside">
-                    <div>1. Open the <a href={`https://console.firebase.google.com/project/${window.location.hostname.includes("localhost") ? "your-project" : "plasma-snow-6hnbb"}/authentication/settings`} target="_blank" rel="noreferrer" className="text-blue-500 font-bold hover:underline">Firebase Auth Settings</a>.</div>
-                    <div>2. Under the <strong>Authorized domains</strong> section, click <strong>Add domain</strong>.</div>
-                    <div>3. Paste the hostname highlighted above and select <strong>Add</strong>.</div>
-                    <div>4. Refresh this tab and try signing in again!</div>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-3 bg-red-100 dark:bg-red-950/40 border border-red-300 dark:border-red-900 rounded-lg text-sm text-red-700 dark:text-red-400 font-medium">
-                  {errorMsg}
-                </div>
-              )}
+            <div className="mb-4 p-3 bg-red-100 dark:bg-red-950/40 border border-red-300 dark:border-red-900 rounded-lg text-sm text-red-700 dark:text-red-400 font-medium">
+              {errorMsg}
             </div>
           )}
           {successMsg && (
@@ -276,32 +246,7 @@ export const Login: React.FC = () => {
                 <span>{submitting ? "Signing In..." : "Log In"}</span>
               </button>
 
-              {/* Federated Login (Google popup context) */}
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                className="w-full h-11 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-[#323334] rounded-lg transition text-neutral-700 dark:text-[#E4E6EB] font-semibold text-sm flex items-center justify-center space-x-2 shadow-sm"
-              >
-                <svg className="w-5 h-5 mr-1" viewBox="0 0 24 24">
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.04c1.74 0 3.3.6 4.53 1.78l3.39-3.39C17.84 1.54 15.11 1 12 1 7.24 1 3.21 3.75 1.34 7.74l3.96 3.07C6.27 7.75 8.91 5.04 12 5.04z"
-                  />
-                  <path
-                    fill="#4285F4"
-                    d="M23.49 12.27c0-.81-.07-1.59-.2-2.36H12v4.51h6.46c-.28 1.48-1.12 2.73-2.38 3.58l3.7 2.87c2.16-1.99 3.41-4.92 3.41-8.6z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.3 14.23c-.24-.73-.38-1.52-.38-2.33s.14-1.6.38-2.33L1.34 6.5C.49 8.15 0 10.02 0 12s.49 3.85 1.34 5.5l3.96-3.27z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c3.24 0 5.96-1.08 7.95-2.92l-3.7-2.87c-1.11.75-2.54 1.19-4.25 1.19-3.09 0-5.73-2.71-6.66-5.77l-3.96 3.07C3.21 20.25 7.24 23 12 23z"
-                  />
-                </svg>
-                <span>Continue with Google</span>
-              </button>
+
 
               <div className="text-center">
                 <button

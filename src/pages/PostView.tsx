@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import { doc, getDoc } from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "../firebase/config";
 import { Post } from "../types";
 import { PostCard } from "../components/PostCard";
 import { PostSkeleton } from "../components/Skeleton";
+import { PostService } from "../services/post";
 
 export const PostView: React.FC = () => {
   const { postId } = useParams<{ postId: string }>();
@@ -17,15 +16,11 @@ export const PostView: React.FC = () => {
 
     const fetchPost = async () => {
       setLoading(true);
-      const path = `posts/${postId}`;
       try {
-        const docRef = doc(db, "posts", postId);
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          setPost(snap.data() as Post);
-        }
+        const data = await PostService.getPost(postId);
+        setPost(data);
       } catch (err) {
-        handleFirestoreError(err, OperationType.GET, path);
+        console.error("Error drawing post detail view:", err);
       } finally {
         setLoading(false);
       }

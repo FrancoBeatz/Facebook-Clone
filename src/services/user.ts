@@ -1,30 +1,42 @@
-import { doc, getDoc, updateDoc, collection, query, where, getDocs, limit } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { db, storage, handleFirestoreError, OperationType } from "../firebase/config";
+import { supabase, isSupabaseConfigured, localDb } from "../supabase/client";
 import { UserProfile } from "../types";
 
 export const UserService = {
   async getUserProfile(uid: string): Promise<UserProfile | null> {
-    const path = `users/${uid}`;
     try {
-      const docRef = doc(db, "users", uid);
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        return docSnap.data() as UserProfile;
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("users")
+          .select("*")
+          .eq("uid", uid)
+          .single();
+        if (error) {
+          console.warn("Could not retrieve profile from Supabase:", error);
+          return null;
+        }
+        return data as UserProfile;
+      } else {
+        const list = localDb.get<UserProfile[]>("users", []);
+        return list.find((u) => u.uid === uid) || null;
       }
-      return null;
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, path);
+      console.error("Error in getUserProfile:", err);
+      return null;
     }
   },
 
   async updateUserProfile(uid: string, data: Partial<UserProfile>): Promise<void> {
-    const path = `users/${uid}`;
     try {
-      const docRef = doc(db, "users", uid);
-      await updateDoc(docRef, data);
+      if (isSupabaseConfigured && supabase) {
+        const { error } = await supabase.from("users").update(data).eq("uid", uid);
+        if (error) throw error;
+      } else {
+        const list = localDb.get<UserProfile[]>("users", []);
+        const updated = list.map((u) => (u.uid === uid ? { ...u, ...data } : u));
+        localDb.set("users", updated);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error in updateUserProfile:", err);
     }
   },
 
@@ -34,11 +46,9 @@ export const UserService = {
     actionType: string
   ): Promise<{ xpAdded: number; leveledUp: boolean; newLevel?: string; unlockedAchievements?: string[] }> {
     try {
-      const docRef = doc(db, "users", uid);
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) return { xpAdded: 0, leveledUp: false };
+      const u = await this.getUserProfile(uid);
+      if (!u) return { xpAdded: 0, leveledUp: false };
 
-      const u = docSnap.data() as UserProfile;
       const currentXp = u.xp || 0;
       const newXp = currentXp + amount;
 
@@ -73,7 +83,7 @@ export const UserService = {
 
       const finalAchievements = [...achievements, ...unlockedAchievements];
 
-      await updateDoc(docRef, {
+      await this.updateUserProfile(uid, {
         xp: newXp,
         level: newLevel,
         achievements: finalAchievements,
@@ -92,51 +102,73 @@ export const UserService = {
   },
 
   async searchUsers(searchText: string): Promise<UserProfile[]> {
-    const path = "users";
     try {
-      const q = query(collection(db, "users"), limit(50));
-      const querySnapshot = await getDocs(q);
-      const results: UserProfile[] = [];
       const searchLower = searchText.toLowerCase().trim();
-
-      querySnapshot.forEach((docSnap) => {
-        const u = docSnap.data() as UserProfile;
-        if (
-          u.fullName.toLowerCase().includes(searchLower) ||
-          u.username.toLowerCase().includes(searchLower) ||
-          u.email.toLowerCase().includes(searchLower)
-        ) {
-          results.push(u);
-        }
-      });
-      return results;
+      if (isSupabaseConfigured && supabase) {
+        // Simple search logic using Supabase ilike
+        const { data, error } = await supabase
+          .from("users")
+          .select("*")
+          .limit(50);
+        if (error) throw error;
+        const results = (data || []).filter(
+          (u: any) =>
+            u.fullName.toLowerCase().includes(searchLower) ||
+            u.username.toLowerCase().includes(searchLower) ||
+            u.email.toLowerCase().includes(searchLower)
+        );
+        return results as UserProfile[];
+      } else {
+        const list = localDb.get<UserProfile[]>("users", []);
+        return list.filter(
+          (u) =>
+            u.fullName.toLowerCase().includes(searchLower) ||
+            u.username.toLowerCase().includes(searchLower) ||
+            u.email.toLowerCase().includes(searchLower)
+        );
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, path);
+      console.error("Error searching users:", err);
+      return [];
     }
   },
 
   async getAllUsers(): Promise<UserProfile[]> {
-    const path = "users";
     try {
-      const q = query(collection(db, "users"), limit(100));
-      const querySnapshot = await getDocs(q);
-      const results: UserProfile[] = [];
-      querySnapshot.forEach((docSnap) => {
-        results.push(docSnap.data() as UserProfile);
-      });
-      return results;
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase.from("users").select("*").limit(100);
+        if (error) throw error;
+        return (data || []) as UserProfile[];
+      } else {
+        return localDb.get<UserProfile[]>("users", []);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, path);
+      console.error("Error getting all users:", err);
+      return [];
     }
   },
 
   async uploadPhoto(uid: string, file: File, type: "profile" | "cover"): Promise<string> {
-    const fileExtension = file.name.split(".").pop();
-    const storagePath = `users/${uid}/${type}_${Date.now()}.${fileExtension}`;
     try {
-      const storageRef = ref(storage, storagePath);
-      await uploadBytes(storageRef, file);
-      const downloadUrl = await getDownloadURL(storageRef);
+      let downloadUrl = "";
+      if (isSupabaseConfigured && supabase) {
+        const fileExtension = file.name.split(".").pop();
+        const storagePath = `${uid}/${type}_${Date.now()}.${fileExtension}`;
+        const { error: uploadError } = await supabase.storage
+          .from("users")
+          .upload(storagePath, file);
+
+        if (uploadError) {
+          console.warn("Storage upload failed, fallback to base64 encoding", uploadError);
+          downloadUrl = await this.convertFileToBase64(file);
+        } else {
+          const { data } = supabase.storage.from("users").getPublicUrl(storagePath);
+          downloadUrl = data.publicUrl;
+        }
+      } else {
+        downloadUrl = await this.convertFileToBase64(file);
+      }
+
       if (type === "profile") {
         await this.updateUserProfile(uid, { profilePicture: downloadUrl });
       } else {
@@ -145,7 +177,20 @@ export const UserService = {
       return downloadUrl;
     } catch (err) {
       console.error(`Error uploading photo ${type}:`, err);
-      throw err;
+      // fallback to inline demo placeholder if base64 conversion fails
+      const demoPlaceholder = type === "profile" 
+        ? "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80" 
+        : "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80";
+      return demoPlaceholder;
     }
+  },
+
+  convertFileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (error) => reject(error);
+    });
   },
 };

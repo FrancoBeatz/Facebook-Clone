@@ -1,15 +1,4 @@
-import {
-  collection,
-  doc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  getDoc,
-  query,
-  orderBy,
-  onSnapshot,
-} from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "../firebase/config";
+import { supabase, isSupabaseConfigured, localDb, pubsub } from "../supabase/client";
 import { Report } from "../types";
 import { PostService } from "./post";
 
@@ -21,79 +10,109 @@ export const AdminService = {
     postContent: string,
     reason: string
   ): Promise<void> {
-    const reportRef = doc(collection(db, "reports"));
-    const path = `reports/${reportRef.id}`;
+    const reportId = "report_" + Math.random().toString(36).substring(3) + "_" + Date.now();
+    const newReport: Report = {
+      id: reportId,
+      reporterId,
+      reporterName,
+      postId,
+      postContent,
+      reason,
+      createdAt: new Date().toISOString(),
+      status: "pending",
+    };
+
     try {
-      const newReport: Report = {
-        id: reportRef.id,
-        reporterId,
-        reporterName,
-        postId,
-        postContent,
-        reason,
-        createdAt: new Date().toISOString(),
-        status: "pending",
-      };
-      await setDoc(reportRef, newReport);
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("reports").insert(newReport);
+      } else {
+        const list = localDb.get<Report[]>("reports", []);
+        list.push(newReport);
+        localDb.set("reports", list);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      console.error("Error submitting content report:", err);
     }
   },
 
   listenToReports(callback: (reports: Report[]) => void) {
-    const path = "reports";
-    const q = query(collection(db, "reports"));
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const list: Report[] = [];
-        snapshot.forEach((docSnap) => {
-          list.push(docSnap.data() as Report);
-        });
-        // client-side sort
-        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        callback(list);
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, path);
+    const fetchReportsList = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase.from("reports").select("*");
+        if (error) throw error;
+        return ((data || []) as Report[]).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+      } else {
+        const list = localDb.get<Report[]>("reports", []);
+        return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       }
-    );
+    };
+
+    fetchReportsList().then(callback).catch((err) => console.warn(err));
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel("reports-feed")
+        .on("postgres_changes", { event: "*", schema: "public", table: "reports" }, async () => {
+          const list = await fetchReportsList();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe("reports", async () => {
+        const list = await fetchReportsList();
+        callback(list);
+      });
+    }
   },
 
   async resolveReport(reportId: string): Promise<void> {
-    const path = `reports/${reportId}`;
     try {
-      await updateDoc(doc(db, "reports", reportId), {
-        status: "resolved",
-      });
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("reports").update({ status: "resolved" }).eq("id", reportId);
+      } else {
+        const list = localDb.get<Report[]>("reports", []);
+        const updated = list.map((r) => (r.id === reportId ? { ...r, status: "resolved" as const } : r));
+        localDb.set("reports", updated);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error resolving content report:", err);
     }
   },
 
   async suspendUser(userId: string): Promise<void> {
-    const path = `users/${userId}`;
     try {
-      await updateDoc(doc(db, "users", userId), {
-        suspended: true,
-      });
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("users").update({ suspended: true }).eq("uid", userId);
+      } else {
+        const list = localDb.get<any[]>("users", []);
+        const updated = list.map((u) => (u.uid === userId ? { ...u, suspended: true } : u));
+        localDb.set("users", updated);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error suspending user profile:", err);
     }
   },
 
   async unsuspendUser(userId: string): Promise<void> {
-    const path = `users/${userId}`;
     try {
-      await updateDoc(doc(db, "users", userId), {
-        suspended: false,
-      });
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("users").update({ suspended: false }).eq("uid", userId);
+      } else {
+        const list = localDb.get<any[]>("users", []);
+        const updated = list.map((u) => (u.uid === userId ? { ...u, suspended: false } : u));
+        localDb.set("users", updated);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
+      console.error("Error unsuspending user profile:", err);
     }
   },
 
   async deletePost(postId: string): Promise<void> {
     return PostService.deletePost(postId);
-  }
+  },
 };

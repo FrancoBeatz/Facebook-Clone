@@ -1,13 +1,4 @@
-import {
-  collection,
-  doc,
-  setDoc,
-  deleteDoc,
-  query,
-  where,
-  onSnapshot,
-} from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "../firebase/config";
+import { supabase, isSupabaseConfigured, localDb, pubsub } from "../supabase/client";
 import { Highlight } from "../types";
 
 export const HighlightService = {
@@ -18,51 +9,79 @@ export const HighlightService = {
     postIds: string[]
   ): Promise<void> {
     const highlightId = `hi_${userId}_${Date.now()}`;
-    const path = `highlights/${highlightId}`;
+    const newHighlight: Highlight = {
+      id: highlightId,
+      userId,
+      title,
+      coverColor,
+      postIds,
+      createdAt: new Date().toISOString(),
+    };
+
     try {
-      const newHighlight: Highlight = {
-        id: highlightId,
-        userId,
-        title,
-        coverColor,
-        postIds,
-        createdAt: new Date().toISOString(),
-      };
-      await setDoc(doc(db, "highlights", highlightId), newHighlight);
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("highlights").insert(newHighlight);
+      } else {
+        const list = localDb.get<Highlight[]>("highlights", []);
+        list.push(newHighlight);
+        localDb.set("highlights", list);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      console.error("Error creating story highlight:", err);
     }
   },
 
   async deleteHighlight(highlightId: string): Promise<void> {
-    const path = `highlights/${highlightId}`;
     try {
-      await deleteDoc(doc(db, "highlights", highlightId));
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("highlights").delete().eq("id", highlightId);
+      } else {
+        const list = localDb.get<Highlight[]>("highlights", []);
+        const filtered = list.filter((h) => h.id !== highlightId);
+        localDb.set("highlights", filtered);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, path);
+      console.error("Error deleting highlight:", err);
     }
   },
 
-  listenToUserHighlights(
-    userId: string,
-    callback: (highlights: Highlight[]) => void
-  ) {
-    const path = "highlights";
-    const q = query(collection(db, "highlights"), where("userId", "==", userId));
-    return onSnapshot(
-      q,
-      (snapshot) => {
-        const list: Highlight[] = [];
-        snapshot.forEach((docSnap) => {
-          list.push(docSnap.data() as Highlight);
-        });
-        // Sort by creation date
-        list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        callback(list);
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, path);
+  listenToUserHighlights(userId: string, callback: (highlights: Highlight[]) => void) {
+    const fetchHighlights = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("highlights")
+          .select("*")
+          .eq("userId", userId);
+        if (error) throw error;
+        return ((data || []) as Highlight[]).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+      } else {
+        const list = localDb.get<Highlight[]>("highlights", []);
+        return list
+          .filter((h) => h.userId === userId)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       }
-    );
-  }
+    };
+
+    fetchHighlights().then(callback).catch((err) => console.warn(err));
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel(`highlights-${userId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "highlights" }, async () => {
+          const list = await fetchHighlights();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe("highlights", async () => {
+        const list = await fetchHighlights();
+        callback(list);
+      });
+    }
+  },
 };

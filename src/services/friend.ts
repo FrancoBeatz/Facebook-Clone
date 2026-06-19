@@ -1,15 +1,4 @@
-import {
-  doc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  collection,
-  where,
-  getDocs,
-} from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "../firebase/config";
+import { supabase, isSupabaseConfigured, localDb, pubsub } from "../supabase/client";
 import { Relationship, UserProfile } from "../types";
 
 export const FriendService = {
@@ -17,96 +6,146 @@ export const FriendService = {
     return [user1, user2].sort().join("_");
   },
 
-  async sendFriendRequest(fromId: string, toId: string): Promise<void> {
-    const relId = this.getRelationshipId(fromId, toId);
-    const path = `relationships/${relId}`;
-    try {
-      const newRequest: Relationship = {
-        id: relId,
-        fromId,
-        toId,
-        status: "requested",
-        createdAt: new Date().toISOString(),
-      };
-      await setDoc(doc(db, "relationships", relId), newRequest);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
-    }
-  },
-
-  async acceptFriendRequest(relId: string, currentUserId: string): Promise<void> {
-    const path = `relationships/${relId}`;
-    try {
-      // Security rules mandate that only the recipient (toId) can accept standard status change to 'friends'
-      // toId is part of existing, we verify toId = currentUserId
-      await updateDoc(doc(db, "relationships", relId), {
-        status: "friends",
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, path);
-    }
-  },
-
   async rejectFriendRequest(relId: string): Promise<void> {
-    const path = `relationships/${relId}`;
     try {
-      await deleteDoc(doc(db, "relationships", relId));
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("relationships").delete().eq("id", relId);
+      } else {
+        const list = localDb.get<Relationship[]>("relationships", []);
+        const filtered = list.filter((r) => r.id !== relId);
+        localDb.set("relationships", filtered);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, path);
+      console.error("Error rejecting friend request:", err);
     }
   },
 
-  async removeFriend(user1: string, user2: string): Promise<void> {
-    const relId = this.getRelationshipId(user1, user2);
-    const path = `relationships/${relId}`;
+  async removeFriend(uid: string, friendId: string): Promise<void> {
+    const relId = this.getRelationshipId(uid, friendId);
     try {
-      await deleteDoc(doc(db, "relationships", relId));
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("relationships").delete().eq("id", relId);
+      } else {
+        const list = localDb.get<Relationship[]>("relationships", []);
+        const filtered = list.filter((r) => r.id !== relId);
+        localDb.set("relationships", filtered);
+      }
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, path);
+      console.error("Error unfriending:", err);
+    }
+  },
+
+  async sendFriendRequest(fromId: string, toId: string): Promise<void> {
+    const relId = [fromId, toId].sort().join("_");
+    const newRequest: Relationship = {
+      id: relId,
+      fromId,
+      toId,
+      status: "requested",
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("relationships").upsert(newRequest);
+      } else {
+        const list = localDb.get<Relationship[]>("relationships", []);
+        const nextList = list.filter((r) => r.id !== relId);
+        nextList.push(newRequest);
+        localDb.set("relationships", nextList);
+      }
+    } catch (err) {
+      console.error("Error sending friend request:", err);
+    }
+  },
+
+  async acceptFriendRequest(fromId: string, toId: string): Promise<void> {
+    const relId = [fromId, toId].sort().join("_");
+
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await supabase
+          .from("relationships")
+          .update({ status: "friends", createdAt: new Date().toISOString() })
+          .eq("id", relId);
+      } else {
+        const list = localDb.get<Relationship[]>("relationships", []);
+        const updated = list.map((r) =>
+          r.id === relId ? { ...r, status: "friends" as const, createdAt: new Date().toISOString() } : r
+        );
+        localDb.set("relationships", updated);
+      }
+    } catch (err) {
+      console.error("Error accepting friend request:", err);
+    }
+  },
+
+  async cancelFriendRequest(fromId: string, toId: string): Promise<void> {
+    const relId = [fromId, toId].sort().join("_");
+
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("relationships").delete().eq("id", relId);
+      } else {
+        const list = localDb.get<Relationship[]>("relationships", []);
+        const filtered = list.filter((r) => r.id !== relId);
+        localDb.set("relationships", filtered);
+      }
+    } catch (err) {
+      console.error("Error cancelling friend request:", err);
+    }
+  },
+
+  async unfriendUser(fromId: string, toId: string): Promise<void> {
+    const relId = [fromId, toId].sort().join("_");
+
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await supabase.from("relationships").delete().eq("id", relId);
+      } else {
+        const list = localDb.get<Relationship[]>("relationships", []);
+        const filtered = list.filter((r) => r.id !== relId);
+        localDb.set("relationships", filtered);
+      }
+    } catch (err) {
+      console.error("Error unfriending user:", err);
     }
   },
 
   listenToRelationships(userId: string, callback: (relationships: Relationship[]) => void) {
-    const path = "relationships";
-    // We listen to relationships where user is fromId or toId
-    // Since firestore doesn't do OR query on separate fields easily without composite indices,
-    // we query relationships twice or listen to the full collection (since list is low count)
-    // or run queries where fromId == userId or toId == userId.
-    // Let's create queries.
-    const qFrom = query(collection(db, "relationships"), where("fromId", "==", userId));
-    const qTo = query(collection(db, "relationships"), where("toId", "==", userId));
-
-    let fromRels: Relationship[] = [];
-    let toRels: Relationship[] = [];
-
-    const handleMerge = () => {
-      // Merge with uniqueness
-      const map = new Map<string, Relationship>();
-      fromRels.forEach(r => map.set(r.id, r));
-      toRels.forEach(r => map.set(r.id, r));
-      callback(Array.from(map.values()));
+    const fetchRelations = async () => {
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from("relationships")
+          .select("*")
+          .or(`fromId.eq.${userId},toId.eq.${userId}`);
+        if (error) throw error;
+        return (data || []) as Relationship[];
+      } else {
+        const list = localDb.get<Relationship[]>("relationships", []);
+        return list.filter((r) => r.fromId === userId || r.toId === userId);
+      }
     };
 
-    const unsubFrom = onSnapshot(qFrom, (snapshot) => {
-      fromRels = [];
-      snapshot.forEach(docSnap => fromRels.push(docSnap.data() as Relationship));
-      handleMerge();
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, path);
-    });
+    fetchRelations().then(callback).catch((err) => console.warn(err));
 
-    const unsubTo = onSnapshot(qTo, (snapshot) => {
-      toRels = [];
-      snapshot.forEach(docSnap => toRels.push(docSnap.data() as Relationship));
-      handleMerge();
-    }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, path);
-    });
-
-    return () => {
-      unsubFrom();
-      unsubTo();
-    };
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel(`relationships-${userId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "relationships" }, async () => {
+          const list = await fetchRelations();
+          callback(list);
+        })
+        .subscribe();
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } else {
+      return pubsub.subscribe("relationships", async () => {
+        const list = await fetchRelations();
+        callback(list);
+      });
+    }
   },
 
   getMutualFriends(
@@ -115,20 +154,15 @@ export const FriendService = {
     allUsers: UserProfile[],
     relationships: Relationship[]
   ): UserProfile[] {
-    // Get list of friends for user 1
     const user1Friends = relationships
-      .filter(r => r.status === "friends" && (r.fromId === user1Id || r.toId === user1Id))
-      .map(r => r.fromId === user1Id ? r.toId : r.fromId);
+      .filter((r) => r.status === "friends" && (r.fromId === user1Id || r.toId === user1Id))
+      .map((r) => (r.fromId === user1Id ? r.toId : r.fromId));
 
-    // Get list of friends for user 2
     const user2Friends = relationships
-      .filter(r => r.status === "friends" && (r.fromId === user2Id || r.toId === user2Id))
-      .map(r => r.fromId === user2Id ? r.toId : r.fromId);
+      .filter((r) => r.status === "friends" && (r.fromId === user2Id || r.toId === user2Id))
+      .map((r) => (r.fromId === user2Id ? r.toId : r.fromId));
 
-    // Intersection
-    const mutualIds = user1Friends.filter(id => user2Friends.includes(id));
-
-    // Map to UserProfiles
-    return allUsers.filter(u => mutualIds.includes(u.uid));
-  }
+    const mutualIds = user1Friends.filter((id) => user2Friends.includes(id));
+    return allUsers.filter((u) => mutualIds.includes(u.uid));
+  },
 };

@@ -1,6 +1,4 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { doc, updateDoc } from "firebase/firestore";
-import { db } from "../firebase/config";
 
 export type SocialTheme =
   | "facebook-dark"
@@ -68,13 +66,19 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setThemeState(newTheme);
     localStorage.setItem("fb-theme", newTheme);
 
-    // If there is an active user logged in, persist to Firestore
+    // If there is an active user logged in, persist to db
     if (activeUserId) {
       try {
-        const userRef = doc(db, "users", activeUserId);
-        await updateDoc(userRef, { theme: newTheme });
+        const { supabase, isSupabaseConfigured, localDb } = await import("../supabase/client");
+        if (isSupabaseConfigured && supabase) {
+          await supabase.from("users").update({ theme: newTheme }).eq("uid", activeUserId);
+        } else {
+          const users = localDb.get<any[]>("users", []);
+          const updated = users.map((u) => u.uid === activeUserId ? { ...u, theme: newTheme } : u);
+          localDb.set("users", updated);
+        }
       } catch (err) {
-        console.warn("Failed to persist theme choice to Firestore:", err);
+        console.warn("Failed to persist theme choice to Supabase:", err);
       }
     }
   };
